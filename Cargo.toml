@@ -1,0 +1,19 @@
+[workspace.package]
+authors = ["Dmitriy Kumshayev <dq@mail.coom>"]
+license = "private"
+description = "Prototype of pipeline engine"
+edition = "2021"
+keywords = ["pipeline"]
+version = "0.0.0"
+
+[workspace]
+resolver = "2"
+
+members = ["pipeline", "pipeline_derive", "pipeline_example"]
+
+[workspace.dependencies]
+chrono = "0.4"
+syn = { version = "2.0.87", features = ["derive", "visit-mut"] }
+quote = "1.0.37"
+thiserror = "2.0"
+bitvec = "1.0.1"

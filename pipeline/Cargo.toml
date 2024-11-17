@@ -1,0 +1,9 @@
+[package]
+name = "pipeline"
+version.workspace = true
+edition .workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+thiserror = { workspace = true }
+bitvec = { workspace = true }
