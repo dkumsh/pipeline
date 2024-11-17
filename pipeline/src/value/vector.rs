@@ -1,5 +1,7 @@
 use bitvec::prelude::*;
 use std::vec::Vec;
+use crate::Error;
+use crate::value::Reset;
 
 pub struct Vector<V> {
     data: Vec<V>,         // Stores the actual values
@@ -181,16 +183,13 @@ impl<V> Vector<V> {
     }
 }
 
-pub trait Reset {
-    fn reset(&mut self);
-}
-
 impl<V> Reset for Vector<V> {
-    fn reset(&mut self) {
+    fn reset(&mut self) -> Result<(), Error> {
         self.update_flags.clear();
         self.update_flags.resize(self.data.len(), false);
         self.indices.clear();
         self.is_updated = false;
+        Ok(())
     }
 }
 
