@@ -5,4 +5,4 @@ pub enum Error {
     #[error("accessing uninitialised value")]
     UninitialisedValue,
 }
-pub use crate::value::Reset as Reset;
+pub use crate::value::Reset;

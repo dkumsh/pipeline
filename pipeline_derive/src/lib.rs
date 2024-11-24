@@ -3,7 +3,7 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
     parse::{Parse, ParseStream},
-    parse_macro_input, parse_quote, FnArg, Ident, ItemFn, ItemMod, LitStr, PatType, Type,
+    parse_macro_input, FnArg, Ident, ItemFn, ItemMod, LitStr, PatType, Type,
 };
 
 // Import Spanned for error reporting
@@ -16,7 +16,7 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut module = parse_macro_input!(item as ItemMod);
 
     let pipeline_name = attr_args.name;
-    let pipeline_name_str = quote!{#pipeline_name}.to_string();
+    let pipeline_name_str = quote! {#pipeline_name}.to_string();
     let constructor_args = attr_args.args;
     let context_name = attr_args.context_name;
 
@@ -35,8 +35,8 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
                         context_name
                     ),
                 )
-                    .to_compile_error()
-                    .into();
+                .to_compile_error()
+                .into();
             }
         }
     } else {
@@ -44,8 +44,7 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     // Collect unique parameters from all stages, excluding the context parameter
-    let (fields, field_names, pipeline_vars) =
-        collect_fields(&stages, context_name.as_ref());
+    let (fields, field_names, pipeline_vars) = collect_fields(&stages, context_name.as_ref());
 
     // Perform Dependency Analysis and Topological Sort
     let compute_calls = match generate_compute_calls(&stages, context_name.as_ref()) {
@@ -234,6 +233,7 @@ fn generate_struct(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn generate_impl(
     pipeline_name: &Ident,
     constructor_args: &[Ident],
@@ -244,7 +244,7 @@ fn generate_impl(
     html_content: &str, // Receive the HTML content
     context_param: Option<&(Ident, Type)>,
 ) -> proc_macro2::TokenStream {
-    let mut constructor_params: Vec<_> = constructor_args
+    let constructor_params: Vec<_> = constructor_args
         .iter()
         .filter_map(|ident| {
             fields
@@ -254,7 +254,7 @@ fn generate_impl(
         })
         .collect();
 
-    let mut constructor_inits: Vec<_> = fields
+    let constructor_inits: Vec<_> = fields
         .iter()
         .map(|(ident, _)| {
             if constructor_args.contains(ident) {
@@ -440,12 +440,10 @@ fn generate_compute_calls(
                         // Check if this is the context parameter
                         if Some(ident) == context_name {
                             quote! { #ident }
+                        } else if is_mut {
+                            quote! { &mut self.#ident }
                         } else {
-                            if is_mut {
-                                quote! { &mut self.#ident }
-                            } else {
-                                quote! { &self.#ident }
-                            }
+                            quote! { &self.#ident }
                         }
                     } else {
                         quote! {}
@@ -523,10 +521,7 @@ fn topological_sort(stages: &HashMap<Ident, StageInfo>) -> syn::Result<Vec<Ident
     Ok(sorted)
 }
 
-fn generate_puml(
-    stages: &[ItemFn],
-    context_name: Option<&Ident>,
-) -> String {
+fn generate_puml(stages: &[ItemFn], context_name: Option<&Ident>) -> String {
     use std::collections::HashSet;
 
     let mut puml = String::new();
@@ -602,11 +597,7 @@ fn generate_puml(
     puml
 }
 
-fn generate_html(
-    pipeline_name: &str,
-    stages: &[ItemFn],
-    context_name: Option<&Ident>,
-) -> String {
+fn generate_html(pipeline_name: &str, stages: &[ItemFn], context_name: Option<&Ident>) -> String {
     use serde_json::json;
     use std::collections::HashSet;
 

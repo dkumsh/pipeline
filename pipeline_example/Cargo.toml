@@ -11,3 +11,4 @@ version.workspace = true
 chrono = { workspace = true }
 pipeline_derive = { path = "../pipeline_derive", version = "0.0.0" }
 pipeline = { path = "../pipeline", version = "0.0.0" }
+anyhow = "1.0.93"

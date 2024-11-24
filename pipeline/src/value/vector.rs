@@ -1,7 +1,7 @@
+use crate::value::Reset;
+use crate::Error;
 use bitvec::prelude::*;
 use std::vec::Vec;
-use crate::Error;
-use crate::value::Reset;
 
 pub struct Vector<V> {
     data: Vec<V>,         // Stores the actual values
@@ -300,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn test_iter_updated() {
+    fn test_iter_updated() -> Result<(), Error> {
         let mut vec = Vector::new();
         vec.push(1);
         vec.push(2);
@@ -316,7 +316,7 @@ mod tests {
         assert_eq!(updated, vec![(0, 1), (1, 20), (2, 3)]);
 
         // Reset and check
-        vec.reset();
+        vec.reset()?;
         assert!(!vec.is_updated());
         let updated: Vec<(usize, i32)> = vec.iter_updated().map(|(i, &v)| (i, v)).collect();
         assert!(updated.is_empty());
@@ -328,6 +328,7 @@ mod tests {
         let updated: Vec<(usize, i32)> = vec.iter_updated().map(|(i, &v)| (i, v)).collect();
         assert_eq!(updated.len(), 1);
         assert_eq!(updated, vec![(1, 200)]);
+        Ok(())
     }
 
     #[test]
@@ -352,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reset() {
+    fn test_reset() -> Result<(), Error> {
         let mut vec = Vector::new();
         vec.push(1);
         vec.push(2);
@@ -360,7 +361,7 @@ mod tests {
 
         assert!(vec.is_updated());
 
-        vec.reset();
+        vec.reset()?;
         assert!(!vec.is_updated());
         assert!(!vec.all_updated());
         assert_eq!(vec.indices.len(), 0);
@@ -377,6 +378,7 @@ mod tests {
         assert!(vec.is_updated());
         assert!(!vec.all_updated());
         assert_eq!(vec.get_updated(1), Some(&20));
+        Ok(())
     }
 
     #[test]
@@ -493,7 +495,7 @@ mod tests {
         assert_eq!(updated, vec![(0, 10), (1, 20), (2, 30)]);
     }
     #[test]
-    fn test_reset_after_all_updated() {
+    fn test_reset_after_all_updated() -> Result<(), Error> {
         let mut vec = Vector::new();
         vec.push(1);
         vec.push(2);
@@ -504,7 +506,7 @@ mod tests {
         assert!(vec.all_updated());
 
         // Reset
-        vec.reset();
+        vec.reset()?;
         assert!(!vec.is_updated());
         assert!(!vec.all_updated());
 
@@ -521,6 +523,7 @@ mod tests {
 
         let updated: Vec<(usize, i32)> = vec.iter_updated().map(|(i, &v)| (i, v)).collect();
         assert_eq!(updated, vec![(0, 10)]);
+        Ok(())
     }
 
     #[test]
