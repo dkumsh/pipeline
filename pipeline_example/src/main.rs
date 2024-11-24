@@ -4,7 +4,7 @@ use pipeline_derive::{pipeline, stage};
 use price_calc::*;
 fn reset<T>(_: &mut T) {}
 #[allow(unused_variables)]
-#[pipeline(name = "MyPipeline", args = "config", context = "ctx: Context")]
+#[pipeline(name = "MyPipeline", args = "config", context = "ctx")]
 pub mod price_calc {
     use crate::{Context, Mid, TopOfBook, Config};
     use pipeline::value::Vector;
@@ -13,7 +13,7 @@ pub mod price_calc {
     use pipeline_derive::{pipeline, stage};
 
     #[stage]
-    pub fn print_mid(config: &Config, ctx: &mut crate::Context, mid: &Vector<Mid>) {}
+    pub fn print_mid(config: &Config, mid: &Vector<Mid>) {}
 
     #[stage]
     pub fn mid(mid_state: &(), config: &Config, ctx: &mut Context, tob: &Vector<TopOfBook>, mid: &mut Vector<Mid>) {}
@@ -32,8 +32,8 @@ pub struct Mid();
 
 fn main() {
     let config = Config::default();
-    let context = Context::default();
-    let pipeline = MyPipeline::new(config,context);
+    let mut context = Context::default();
+    let pipeline = MyPipeline::new(config);
 
     // Get the PUML content
     let puml_content = MyPipeline::puml_diagram();
@@ -49,5 +49,5 @@ fn main() {
 
     // Run the pipeline
     let mut pipeline = pipeline;
-    pipeline.compute().unwrap();
+    pipeline.compute(&mut context).unwrap();
 }

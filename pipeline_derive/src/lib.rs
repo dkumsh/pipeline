@@ -3,7 +3,7 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
     parse::{Parse, ParseStream},
-    parse_macro_input, FnArg, Ident, ItemFn, ItemMod, LitStr, PatType, Type, TypeReference,
+    parse_macro_input, parse_quote, FnArg, Ident, ItemFn, ItemMod, LitStr, PatType, Type,
 };
 
 // Import Spanned for error reporting
@@ -18,34 +18,49 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
     let pipeline_name = attr_args.name;
     let pipeline_name_str = quote!{#pipeline_name}.to_string();
     let constructor_args = attr_args.args;
-    let context_param = attr_args.context_param;
+    let context_name = attr_args.context_name;
 
     // Extract public functions annotated with #[stage]
     let stages = extract_stages(&mut module);
 
+    // Infer the context type from the stages
+    let context_param = if let Some(context_name) = &context_name {
+        match infer_context_type(&stages, context_name) {
+            Some(ty) => Some((context_name.clone(), ty)),
+            None => {
+                return syn::Error::new_spanned(
+                    context_name,
+                    format!(
+                        "Context parameter '{}' not found in any stage functions",
+                        context_name
+                    ),
+                )
+                    .to_compile_error()
+                    .into();
+            }
+        }
+    } else {
+        None
+    };
+
     // Collect unique parameters from all stages, excluding the context parameter
     let (fields, field_names, pipeline_vars) =
-        collect_fields(&stages, context_param.as_ref().map(|(name, _)| name));
+        collect_fields(&stages, context_name.as_ref());
 
     // Perform Dependency Analysis and Topological Sort
-    let compute_calls = match generate_compute_calls(&stages, context_param.as_ref().map(|(name, _)| name)) {
+    let compute_calls = match generate_compute_calls(&stages, context_name.as_ref()) {
         Ok(calls) => calls,
         Err(e) => return e.to_compile_error().into(),
     };
 
     // Generate the PUML Diagram Content
-    let puml_content = generate_puml(&stages, context_param.as_ref().map(|(name, _)| name));
+    let puml_content = generate_puml(&stages, context_name.as_ref());
 
     // Generate the HTML Diagram Content
-    let html_content = generate_html(&pipeline_name_str, &stages, context_param.as_ref().map(|(name, _)| name));
+    let html_content = generate_html(pipeline_name_str.as_str(), &stages, context_name.as_ref());
 
-    // Generate the struct
-    let struct_def = generate_struct(
-        &pipeline_name,
-        &fields,
-        &pipeline_vars,
-        context_param.as_ref(),
-    );
+    // Generate the struct (context is not included)
+    let struct_def = generate_struct(&pipeline_name, &fields, &pipeline_vars);
 
     // Generate the impl block
     let impl_block = generate_impl(
@@ -54,8 +69,8 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
         &fields,
         &compute_calls,
         &field_names,
-        &puml_content,   // Pass the PUML content
-        &html_content,   // Pass the HTML content
+        &puml_content,
+        &html_content,
         context_param.as_ref(),
     );
 
@@ -75,14 +90,14 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
 struct PipelineArgs {
     name: Ident,
     args: Vec<Ident>,
-    context_param: Option<(Ident, Box<Type>)>, // (name, type)
+    context_name: Option<Ident>,
 }
 
 impl Parse for PipelineArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut name = None;
         let mut args = Vec::new();
-        let mut context_param = None;
+        let mut context_name = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -99,26 +114,7 @@ impl Parse for PipelineArgs {
                     .collect();
             } else if key == "context" {
                 let value: LitStr = input.parse()?;
-                let context_str = value.value();
-                // Parse the context parameter as a function argument
-                let context_arg: FnArg = syn::parse_str(&context_str)?;
-                if let FnArg::Typed(pat_type) = context_arg {
-                    if let syn::Pat::Ident(pat_ident) = *pat_type.pat {
-                        let ident = pat_ident.ident;
-                        let ty = pat_type.ty;
-                        context_param = Some((ident, ty));
-                    } else {
-                        return Err(syn::Error::new_spanned(
-                            pat_type.pat,
-                            "Expected an identifier for context parameter",
-                        ));
-                    }
-                } else {
-                    return Err(syn::Error::new_spanned(
-                        value,
-                        "Invalid context parameter format",
-                    ));
-                }
+                context_name = Some(format_ident!("{}", value.value()));
             } else {
                 return Err(syn::Error::new_spanned(
                     key,
@@ -140,7 +136,7 @@ impl Parse for PipelineArgs {
         Ok(PipelineArgs {
             name,
             args,
-            context_param,
+            context_name,
         })
     }
 }
@@ -162,6 +158,21 @@ fn extract_stages(module: &mut ItemMod) -> Vec<ItemFn> {
 }
 
 use std::collections::{HashMap, HashSet};
+
+fn infer_context_type(stages: &[ItemFn], context_name: &Ident) -> Option<Type> {
+    for stage in stages {
+        for input in &stage.sig.inputs {
+            if let FnArg::Typed(PatType { pat, ty, .. }) = input {
+                if let syn::Pat::Ident(pat_ident) = &**pat {
+                    if &pat_ident.ident == context_name {
+                        return Some((**ty).clone());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
 
 fn collect_fields(
     stages: &[ItemFn],
@@ -208,26 +219,17 @@ fn generate_struct(
     pipeline_name: &Ident,
     fields: &[(Ident, Type)],
     pipeline_vars: &[String],
-    context_param: Option<&(Ident, Box<Type>)>,
 ) -> proc_macro2::TokenStream {
     let vars_len = pipeline_vars.len();
-
     let field_defs: Vec<_> = fields
         .iter()
         .map(|(ident, ty)| quote! { pub #ident: #ty })
         .collect();
 
-    let context_field = if let Some((context_name, context_type)) = context_param {
-        quote! { pub #context_name: #context_type }
-    } else {
-        quote! {}
-    };
-
     quote! {
         pub struct #pipeline_name {
             pub pipeline_vars: [&'static str; #vars_len],
-            #(#field_defs),*,
-            #context_field
+            #(#field_defs),*
         }
     }
 }
@@ -238,9 +240,9 @@ fn generate_impl(
     fields: &[(Ident, Type)],
     compute_calls: &[proc_macro2::TokenStream],
     field_names: &[Ident],
-    puml_content: &str,   // Receive the PUML content
-    html_content: &str,   // Receive the HTML content
-    context_param: Option<&(Ident, Box<Type>)>,
+    puml_content: &str, // Receive the PUML content
+    html_content: &str, // Receive the HTML content
+    context_param: Option<&(Ident, Type)>,
 ) -> proc_macro2::TokenStream {
     let mut constructor_params: Vec<_> = constructor_args
         .iter()
@@ -271,12 +273,6 @@ fn generate_impl(
         })
         .collect::<Vec<_>>();
 
-    // Handle context parameter in constructor
-    if let Some((context_name, context_type)) = context_param {
-        constructor_params.push(quote! { #context_name: #context_type });
-        constructor_inits.push(quote! { #context_name });
-    }
-
     // Generate reset calls
     let reset_calls: Vec<_> = fields
         .iter()
@@ -289,6 +285,13 @@ fn generate_impl(
     // Convert the HTML content to a string literal
     let html_literal = LitStr::new(html_content, proc_macro2::Span::call_site());
 
+    // Prepare compute method signature
+    let compute_params = if let Some((context_name, context_type)) = context_param {
+        quote! { &mut self, #context_name: #context_type }
+    } else {
+        quote! { &mut self }
+    };
+
     quote! {
         impl #pipeline_name {
             pub fn new(#(#constructor_params),*) -> Self {
@@ -298,7 +301,7 @@ fn generate_impl(
                 }
             }
 
-            pub fn compute(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+            pub fn compute(#compute_params) -> Result<(), Box<dyn std::error::Error>> {
                 #(#compute_calls)*
                 self.reset();
                 Ok(())
@@ -354,7 +357,7 @@ fn generate_compute_calls(
                     }
 
                     match &**ty {
-                        Type::Reference(TypeReference { mutability, .. }) => {
+                        Type::Reference(syn::TypeReference { mutability, .. }) => {
                             if mutability.is_some() {
                                 // Mutable reference - variable is written
                                 if let Some(existing_writer) = var_writers.get(&var_name) {
@@ -428,7 +431,7 @@ fn generate_compute_calls(
 
                         // Determine whether the parameter is mutable or not
                         let is_mut = match &**ty {
-                            Type::Reference(TypeReference { mutability, .. }) => {
+                            Type::Reference(syn::TypeReference { mutability, .. }) => {
                                 mutability.is_some()
                             }
                             _ => false,
@@ -436,11 +439,7 @@ fn generate_compute_calls(
 
                         // Check if this is the context parameter
                         if Some(ident) == context_name {
-                            if is_mut {
-                                quote! { &mut self.#ident }
-                            } else {
-                                quote! { &self.#ident }
-                            }
+                            quote! { #ident }
                         } else {
                             if is_mut {
                                 quote! { &mut self.#ident }
@@ -475,9 +474,7 @@ struct StageInfo {
     dependencies: HashSet<Ident>,
 }
 
-fn topological_sort(
-    stages: &HashMap<Ident, StageInfo>,
-) -> syn::Result<Vec<Ident>> {
+fn topological_sort(stages: &HashMap<Ident, StageInfo>) -> syn::Result<Vec<Ident>> {
     let mut sorted = Vec::new();
     let mut visited = HashSet::new();
     let mut temp_mark = HashSet::new();
@@ -564,12 +561,12 @@ fn generate_puml(
         for input in &stage.sig.inputs {
             if let FnArg::Typed(PatType { pat, ty, .. }) = input {
                 if let syn::Pat::Ident(pat_ident) = &**pat {
-                    let var_name = pat_ident.ident.to_string();
-
                     // Skip context parameter
                     if Some(&pat_ident.ident) == context_name {
                         continue;
                     }
+
+                    let var_name = pat_ident.ident.to_string();
 
                     // Prefix variable names with a dollar sign
                     let puml_var_name = format!("${}", var_name);
@@ -581,7 +578,7 @@ fn generate_puml(
 
                     // Determine the direction of the relationship
                     let is_mut = match &**ty {
-                        Type::Reference(TypeReference { mutability, .. }) => {
+                        Type::Reference(syn::TypeReference { mutability, .. }) => {
                             mutability.is_some()
                         }
                         _ => false,
@@ -636,12 +633,12 @@ fn generate_html(
         for input in &stage.sig.inputs {
             if let FnArg::Typed(PatType { pat, ty, .. }) = input {
                 if let syn::Pat::Ident(pat_ident) = &**pat {
-                    let var_name = pat_ident.ident.to_string();
-
                     // Skip context parameter
                     if Some(&pat_ident.ident) == context_name {
                         continue;
                     }
+
+                    let var_name = pat_ident.ident.to_string();
 
                     // Prefix variable names with a dollar sign to distinguish them
                     let vis_var_name = format!("${}", var_name);
@@ -684,7 +681,7 @@ fn generate_html(
         }
     }
 
-    // Generate the HTML content
+    // Generate the HTML content (matching your version)
     let html_content = format!(
         r###"
 <html lang="en">
@@ -735,6 +732,7 @@ fn generate_html(
 <div style="clear:both"></div>
 
 <script type="text/javascript">
+            let deal = "MyPipeline";
             let maxModelLevel = 0;
             let nd = {{}};
             var groups = {{
@@ -782,6 +780,7 @@ fn generate_html(
                     container: controls
                 }}
             }};
+            document.getElementById("details").innerHTML = "<b>Deal</b>: " + deal;
 
             let network = new vis.Network(container, {{nodes, edges}}, options);
             network.setSize('1000px', '70%');
