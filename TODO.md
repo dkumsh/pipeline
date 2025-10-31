@@ -30,7 +30,7 @@ github.com
 
      * ~~Allow optional parameter attributes (e.g. #[rename = "field_name"]) for cases where variable names in functions differ from field names in the pipeline context.~~
 
-     * Consider enforcing a canonical ordering of stage execution when multiple valid topological orders exist (lexical order of stage names) to avoid nondeterministic behaviour.
+     * ~~Consider enforcing a canonical ordering of stage execution when multiple valid topological orders exist (lexical order of stage names) to avoid nondeterministic behaviour.~~
 
   3. _**Optional diagram feature and configurable build flags**_
 

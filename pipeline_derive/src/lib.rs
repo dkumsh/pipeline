@@ -180,6 +180,7 @@ fn extract_stages(module: &mut ItemMod) -> Vec<ItemFn> {
     stages
 }
 
+use proc_macro2::Span;
 use std::collections::{HashMap, HashSet};
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
@@ -317,7 +318,7 @@ fn generate_impl(
             let name = ident.to_string();
             if output_vars.contains(&name) {
                 Some(quote! {
-                    Reset::reset(&mut self.#ident)
+                    ::pipeline::Reset::reset(&mut self.#ident)
                         .map_err(|e| -> #error_ty { e.into() })?;
                 })
             } else {
@@ -345,7 +346,6 @@ fn generate_impl(
 
     quote! {
         // Bring Reset into scope so the trait method is available.
-        use ::pipeline::Reset;
         impl #pipeline_name {
             pub fn new(#(#constructor_params),*) -> Self {
                 Self {
@@ -475,7 +475,12 @@ fn generate_compute_calls(
     }
 
     // Perform topological sort
-    let sorted_stages = topological_sort(&stage_infos)?;
+    let order_map: HashMap<Ident, usize> = stages
+        .iter()
+        .enumerate()
+        .map(|(idx, stage)| (stage.sig.ident.clone(), idx))
+        .collect();
+    let sorted_stages = topological_sort(&stage_infos, order_map)?;
 
     // Generate function calls in sorted order
     let mut compute_calls = Vec::new();
@@ -561,13 +566,17 @@ fn collect_outputs(
             if let FnArg::Typed(PatType { attrs, pat, ty, .. }) = input
                 && let syn::Pat::Ident(pat_ident) = &**pat
             {
-                // Skip context parameter
                 if Some(&pat_ident.ident) == context_name {
                     continue;
                 }
                 if let Type::Reference(type_ref) = &**ty
                     && type_ref.mutability.is_some()
                 {
+                    // skip resettable fields marked #[skip_reset]
+                    if has_skip_reset_attr(attrs) {
+                        continue;
+                    }
+                    // existing: get the pipeline field name (respect #[rename])
                     let target_ident = if let Some(new_name) = get_rename_attr(attrs) {
                         format_ident!("{}", new_name)
                     } else {
@@ -589,53 +598,51 @@ struct StageInfo {
     dependencies: HashSet<Ident>,
 }
 
-fn topological_sort(stages: &HashMap<Ident, StageInfo>) -> syn::Result<Vec<Ident>> {
-    let mut sorted = Vec::new();
-    let mut visited = HashSet::new();
-    let mut temp_mark = HashSet::new();
-
-    fn visit(
-        stage_name: &Ident,
-        stages: &HashMap<Ident, StageInfo>,
-        sorted: &mut Vec<Ident>,
-        visited: &mut HashSet<Ident>,
-        temp_mark: &mut HashSet<Ident>,
-    ) -> syn::Result<()> {
-        if temp_mark.contains(stage_name) {
-            return Err(syn::Error::new(
-                stage_name.span(),
-                format!("Cycle detected involving stage '{}'", stage_name),
-            ));
+fn topological_sort(
+    stages: &HashMap<Ident, StageInfo>,
+    order_map: HashMap<Ident, usize>,
+) -> syn::Result<Vec<Ident>> {
+    // in-degree of each node
+    let mut indegree = HashMap::new();
+    // adjacency: stage -> dependents
+    let mut adj = HashMap::<Ident, Vec<Ident>>::new();
+    for (name, info) in stages {
+        indegree.insert(name.clone(), info.dependencies.len());
+        for dep in &info.dependencies {
+            adj.entry(dep.clone()).or_default().push(name.clone());
         }
+    }
 
-        if !visited.contains(stage_name) {
-            temp_mark.insert(stage_name.clone());
+    // initial zero-in-degree nodes
+    let mut zeros: Vec<Ident> = stages
+        .keys()
+        .filter(|k| indegree[*k] == 0)
+        .cloned()
+        .collect();
 
-            let stage_info = stages.get(stage_name).unwrap();
-
-            for dep in &stage_info.dependencies {
-                visit(dep, stages, sorted, visited, temp_mark)?;
+    let mut result = Vec::new();
+    while !zeros.is_empty() {
+        // pick the earliest-defined stage
+        zeros.sort_by_key(|id| order_map[id]);
+        let node = zeros.remove(0);
+        result.push(node.clone());
+        if let Some(children) = adj.get(&node) {
+            for child in children {
+                let e = indegree.get_mut(child).unwrap();
+                *e -= 1;
+                if *e == 0 {
+                    zeros.push(child.clone());
+                }
             }
-
-            temp_mark.remove(stage_name);
-            visited.insert(stage_name.clone());
-            sorted.push(stage_name.clone());
         }
-
-        Ok(())
     }
-
-    for stage_name in stages.keys() {
-        visit(
-            stage_name,
-            stages,
-            &mut sorted,
-            &mut visited,
-            &mut temp_mark,
-        )?;
+    if result.len() != stages.len() {
+        return Err(syn::Error::new(
+            Span::call_site(),
+            "Cycle detected in stage dependencies",
+        ));
     }
-
-    Ok(sorted)
+    Ok(result)
 }
 
 fn generate_puml(stages: &[ItemFn], context_name: Option<&Ident>) -> String {
@@ -764,9 +771,11 @@ pub fn stage(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut func = parse_macro_input!(item as ItemFn);
     for input in func.sig.inputs.iter_mut() {
         if let FnArg::Typed(pat_type) = input {
-            pat_type
-                .attrs
-                .retain(|attr| !attr.path().is_ident("rename"));
+            pat_type.attrs.retain(|attr| {
+                let last = attr.path().segments.last().map(|s| &s.ident);
+                last != Some(&Ident::new("rename", Span::call_site()))
+                    && last != Some(&Ident::new("skip_reset", Span::call_site()))
+            });
         }
     }
     TokenStream::from(quote! { #func })
@@ -778,6 +787,17 @@ fn is_stage_attr(attr: &syn::Attribute) -> bool {
         .last()
         .is_some_and(|seg| seg.ident == "stage")
 }
+
+fn has_skip_reset_attr(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        // Detect both #[skip_reset] and namespaced forms like #[pipeline::skip_reset]
+        attr.path()
+            .segments
+            .last()
+            .is_some_and(|seg| seg.ident == "skip_reset")
+    })
+}
+
 // Import Spanned for error reporting
 use syn::spanned::Spanned;
 
