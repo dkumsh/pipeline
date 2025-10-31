@@ -2,8 +2,9 @@ extern crate proc_macro;
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
+    FnArg, Ident, ItemFn, ItemMod, LitStr, PatType, Type,
     parse::{Parse, ParseStream},
-    parse_macro_input, FnArg, Ident, ItemFn, ItemMod, LitStr, PatType, Type,
+    parse_macro_input,
 };
 
 // Import Spanned for error reporting
@@ -52,6 +53,9 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(e) => return e.to_compile_error().into(),
     };
 
+    // Collect the names of variables written by any stage.  Only these need resetting.
+    let output_vars = collect_outputs(&stages, context_name.as_ref());
+
     // Generate the PUML Diagram Content
     let puml_content = generate_puml(&stages, context_name.as_ref());
 
@@ -71,6 +75,7 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
         &puml_content,
         &html_content,
         context_param.as_ref(),
+        &output_vars,
     );
 
     // Reconstruct the module with stages unmodified
@@ -145,11 +150,10 @@ fn extract_stages(module: &mut ItemMod) -> Vec<ItemFn> {
 
     if let Some((_, items)) = &mut module.content {
         for item in items.iter_mut() {
-            if let syn::Item::Fn(func) = item {
-                if func.attrs.iter().any(|attr| attr.path().is_ident("stage")) {
+            if let syn::Item::Fn(func) = item
+                && func.attrs.iter().any(|attr| attr.path().is_ident("stage")) {
                     stages.push(func.clone());
                 }
-            }
         }
     }
 
@@ -161,13 +165,11 @@ use std::collections::{HashMap, HashSet};
 fn infer_context_type(stages: &[ItemFn], context_name: &Ident) -> Option<Type> {
     for stage in stages {
         for input in &stage.sig.inputs {
-            if let FnArg::Typed(PatType { pat, ty, .. }) = input {
-                if let syn::Pat::Ident(pat_ident) = &**pat {
-                    if &pat_ident.ident == context_name {
+            if let FnArg::Typed(PatType { pat, ty, .. }) = input
+                && let syn::Pat::Ident(pat_ident) = &**pat
+                    && &pat_ident.ident == context_name {
                         return Some((**ty).clone());
                     }
-                }
-            }
         }
     }
     None
@@ -181,8 +183,8 @@ fn collect_fields(
 
     for stage in stages {
         for input in &stage.sig.inputs {
-            if let FnArg::Typed(PatType { pat, ty, .. }) = input {
-                if let syn::Pat::Ident(pat_ident) = &**pat {
+            if let FnArg::Typed(PatType { pat, ty, .. }) = input
+                && let syn::Pat::Ident(pat_ident) = &**pat {
                     let ident = pat_ident.ident.clone();
 
                     // Skip the context parameter
@@ -200,7 +202,6 @@ fn collect_fields(
                         .entry(ident.to_string())
                         .or_insert((ident.clone(), ty));
                 }
-            }
         }
     }
 
@@ -243,6 +244,7 @@ fn generate_impl(
     puml_content: &str, // Receive the PUML content
     html_content: &str, // Receive the HTML content
     context_param: Option<&(Ident, Type)>,
+    output_vars: &HashSet<String>,
 ) -> proc_macro2::TokenStream {
     let constructor_params: Vec<_> = constructor_args
         .iter()
@@ -273,10 +275,17 @@ fn generate_impl(
         })
         .collect::<Vec<_>>();
 
-    // Generate reset calls
+    // Generate reset calls only for fields that are outputs (written by some stage)
     let reset_calls: Vec<_> = fields
         .iter()
-        .map(|(ident, _)| quote! { reset(&mut self.#ident); })
+        .filter_map(|(ident, _)| {
+            let name = ident.to_string();
+            if output_vars.contains(&name) {
+                Some(quote! { Reset::reset(&mut self.#ident)?; })
+            } else {
+                None
+            }
+        })
         .collect();
 
     // Convert the PUML content to a string literal
@@ -293,6 +302,8 @@ fn generate_impl(
     };
 
     quote! {
+        // Bring Reset into scope so the trait method is available.
+        use ::pipeline::Reset;
         impl #pipeline_name {
             pub fn new(#(#constructor_params),*) -> Self {
                 Self {
@@ -301,14 +312,17 @@ fn generate_impl(
                 }
             }
 
-            pub fn compute(#compute_params) -> Result<(), Box<dyn std::error::Error>> {
+            /// Executes all stages in topological order, propagating any errors.
+            pub fn compute(#compute_params) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 #(#compute_calls)*
-                self.reset();
+                self.reset()?;
                 Ok(())
             }
-
-            pub fn reset(&mut self) {
+            /// Resets the update flags on all mutated fields.  Errors from
+            /// the `Reset` trait are propagated to the caller.
+            pub fn reset(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 #(#reset_calls)*
+                Ok(())
             }
 
             /// Returns the PlantUML diagram representing the pipeline stages and their dependencies.
@@ -347,8 +361,8 @@ fn generate_compute_calls(
         let mut output_vars = HashSet::new();
 
         for input in &stage.sig.inputs {
-            if let FnArg::Typed(PatType { pat, ty, .. }) = input {
-                if let syn::Pat::Ident(pat_ident) = &**pat {
+            if let FnArg::Typed(PatType { pat, ty, .. }) = input
+                && let syn::Pat::Ident(pat_ident) = &**pat {
                     let var_name = pat_ident.ident.to_string();
 
                     // Skip context parameter
@@ -383,7 +397,6 @@ fn generate_compute_calls(
                         }
                     }
                 }
-            }
         }
 
         stage_infos.insert(
@@ -400,11 +413,10 @@ fn generate_compute_calls(
     // Build dependencies between stages
     for stage_info in stage_infos.values_mut() {
         for input_var in &stage_info.inputs {
-            if let Some(writer_func) = var_writers.get(input_var) {
-                if writer_func != &stage_info.name {
+            if let Some(writer_func) = var_writers.get(input_var)
+                && writer_func != &stage_info.name {
                     stage_info.dependencies.insert(writer_func.clone());
                 }
-            }
         }
     }
 
@@ -454,14 +466,58 @@ fn generate_compute_calls(
             })
             .collect::<Vec<_>>();
 
-        let call = quote! {
-            #stage_name(#(#args),*);
+        // Determine whether the stage returns a Result.  If so, use `?` to
+        // propagate errors; otherwise just call it.
+        let returns_result = matches!(
+            &stage.sig.output,
+            syn::ReturnType::Type(_, ty) if is_result_type(ty)
+        );
+
+        let call = if returns_result {
+            quote! { #stage_name(#(#args),*)?; }
+        } else {
+            quote! { #stage_name(#(#args),*); }
         };
 
         compute_calls.push(call);
     }
 
     Ok(compute_calls)
+}
+
+/// Returns true if the provided type is a `Result<_, _>`.
+fn is_result_type(ty: &Type) -> bool {
+    if let Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last() {
+            return segment.ident == "Result";
+        }
+    false
+}
+
+/// Collects the names of variables that are written (i.e. passed as `&mut`) in any stage.
+fn collect_outputs(
+    stages: &[ItemFn],
+    context_name: Option<&Ident>,
+) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+    let mut outputs = HashSet::new();
+    for stage in stages {
+        for input in &stage.sig.inputs {
+            if let FnArg::Typed(PatType { pat, ty, .. }) = input
+                && let syn::Pat::Ident(pat_ident) = &**pat {
+                    // Skip context parameter
+                    if Some(&pat_ident.ident) == context_name {
+                        continue;
+                    }
+                    // Mutable references are outputs
+                    if let Type::Reference(type_ref) = &**ty
+                        && type_ref.mutability.is_some() {
+                            outputs.insert(pat_ident.ident.to_string());
+                        }
+                }
+        }
+    }
+    outputs
 }
 
 struct StageInfo {
@@ -554,8 +610,8 @@ fn generate_puml(stages: &[ItemFn], context_name: Option<&Ident>) -> String {
         puml.push_str(&format!("class {} <<Stage>>\n", stage_name));
 
         for input in &stage.sig.inputs {
-            if let FnArg::Typed(PatType { pat, ty, .. }) = input {
-                if let syn::Pat::Ident(pat_ident) = &**pat {
+            if let FnArg::Typed(PatType { pat, ty, .. }) = input
+                && let syn::Pat::Ident(pat_ident) = &**pat {
                     // Skip context parameter
                     if Some(&pat_ident.ident) == context_name {
                         continue;
@@ -588,7 +644,6 @@ fn generate_puml(stages: &[ItemFn], context_name: Option<&Ident>) -> String {
                         puml.push_str(&format!("\"{}\" --> {}\n", puml_var_name, stage_name));
                     }
                 }
-            }
         }
     }
 
@@ -622,8 +677,8 @@ fn generate_html(pipeline_name: &str, stages: &[ItemFn], context_name: Option<&I
         }));
 
         for input in &stage.sig.inputs {
-            if let FnArg::Typed(PatType { pat, ty, .. }) = input {
-                if let syn::Pat::Ident(pat_ident) = &**pat {
+            if let FnArg::Typed(PatType { pat, ty, .. }) = input
+                && let syn::Pat::Ident(pat_ident) = &**pat {
                     // Skip context parameter
                     if Some(&pat_ident.ident) == context_name {
                         continue;
@@ -668,7 +723,6 @@ fn generate_html(pipeline_name: &str, stages: &[ItemFn], context_name: Option<&I
                         }));
                     }
                 }
-            }
         }
     }
 

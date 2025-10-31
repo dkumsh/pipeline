@@ -4,7 +4,7 @@ use pipeline::value::Vector;
 use pipeline_derive::{pipeline, stage};
 use price_calc::*;
 use std::fs;
-fn reset<T>(_: &mut T) {}
+
 #[allow(unused_variables)]
 #[pipeline(name = "MyPipeline", args = "config", context = "ctx")]
 pub mod price_calc {
@@ -15,7 +15,10 @@ pub mod price_calc {
     use pipeline_derive::{pipeline, stage};
 
     #[stage]
-    pub fn print_mid(config: &Config, mid: &Vector<Mid>) {}
+    pub fn print_mid(config: &Config, mid: &Vector<Mid>) -> anyhow::Result<()> {
+        // stage logic here
+        Ok(())
+    }
 
     #[stage]
     pub fn mid(
@@ -24,7 +27,9 @@ pub mod price_calc {
         ctx: &mut Context,
         tob: &Vector<TopOfBook>,
         mid: &mut Vector<Mid>,
-    ) {
+    ) -> anyhow::Result<()> {
+        // stage logic here
+        Ok(())
     }
 }
 
@@ -52,13 +57,13 @@ fn main() -> anyhow::Result<(), Error> {
 
     // Write the HTML content to a
     fs::create_dir_all("target/graph/")?;
-    MyPipeline::write_html_to_file("target/graph/pipeline_graph.html").unwrap();
+    MyPipeline::write_html_to_file("target/graph/pipeline_graph.html")?;
 
     // You can now use PlantUML to generate the diagram:
     // java -jar plantuml.jar pipeline_diagram.puml
 
     // Run the pipeline
     let mut pipeline = pipeline;
-    pipeline.compute(&mut context).unwrap();
+    pipeline.compute(&mut context)?;
     Ok(())
 }

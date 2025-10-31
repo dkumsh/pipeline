@@ -1,5 +1,5 @@
-use crate::value::Reset;
 use crate::Error;
+use crate::value::Reset;
 use bitvec::prelude::*;
 use std::vec::Vec;
 
