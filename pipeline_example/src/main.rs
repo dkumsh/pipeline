@@ -20,7 +20,7 @@ pub enum AppError {
     context = "ctx",
     error = "AppError"
 )]
-pub mod price_calc {
+pub mod calculator {
     use super::AppError;
     use crate::{Config, Context, Mid, TopOfBook};
     use pipeline::value::Vector;
