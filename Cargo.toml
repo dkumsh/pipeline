@@ -1,10 +1,10 @@
 [workspace.package]
 authors = ["Dmitriy Kumshayev <dq@mail.coom>"]
 license = "private"
-description = "Prototype of pipeline engine"
-edition = "2021"
+description = "Compile‑time pipeline DSL for structuring computations"
+edition = "2024"
 keywords = ["pipeline"]
-version = "0.0.0"
+version = "0.1.0"
 
 [workspace]
 resolver = "2"
