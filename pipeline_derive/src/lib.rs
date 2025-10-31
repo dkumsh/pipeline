@@ -7,6 +7,12 @@ use syn::{
     parse_macro_input,
 };
 
+// Compile the template into the derive crate binary:
+const HTML_TEMPLATE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/pipeline_graph.html"
+));
+
 // Import Spanned for error reporting
 use syn::spanned::Spanned;
 
@@ -64,8 +70,8 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Generate the PUML Diagram Content
     let puml_content = generate_puml(&stages, context_name.as_ref());
 
-    // Generate the HTML Diagram Content
-    let html_content = generate_html(pipeline_name_str.as_str(), &stages, context_name.as_ref());
+    // Generate the JSON for HTML diagram (nodes/edges only)
+    let (nodes_json, edges_json) = generate_html_data(&stages, context_name.as_ref());
 
     // Generate the struct (context is not included)
     let struct_def = generate_struct(&pipeline_name, &fields, &pipeline_vars);
@@ -78,7 +84,9 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
         &compute_calls,
         &field_names,
         &puml_content,
-        &html_content,
+        &pipeline_name_str,
+        &nodes_json,
+        &edges_json,
         context_param.as_ref(),
         &output_vars,
         &error_ty,
@@ -257,8 +265,10 @@ fn generate_impl(
     fields: &[(Ident, Type)],
     compute_calls: &[proc_macro2::TokenStream],
     field_names: &[Ident],
-    puml_content: &str, // Receive the PUML content
-    html_content: &str, // Receive the HTML content
+    puml_content: &str,      // Receive the PUML content
+    pipeline_name_str: &str, // for HTML template
+    nodes_json: &str,
+    edges_json: &str,
     context_param: Option<&(Ident, Type)>,
     output_vars: &HashSet<String>,
     error_ty: &Type,
@@ -308,11 +318,15 @@ fn generate_impl(
         })
         .collect();
 
-    // Convert the PUML content to a string literal
+    // Convert PUML to literal
     let puml_literal = LitStr::new(puml_content, proc_macro2::Span::call_site());
 
-    // Convert the HTML content to a string literal
-    let html_literal = LitStr::new(html_content, proc_macro2::Span::call_site());
+    let html_template_lit = LitStr::new(HTML_TEMPLATE, proc_macro2::Span::call_site());
+
+    // Precompute JSONs and pipeline name as literals to splice into generated code
+    let nodes_json_lit = LitStr::new(nodes_json, proc_macro2::Span::call_site());
+    let edges_json_lit = LitStr::new(edges_json, proc_macro2::Span::call_site());
+    let pipeline_name_lit = LitStr::new(pipeline_name_str, proc_macro2::Span::call_site());
 
     // Prepare compute method signature
     let compute_params = if let Some((context_name, context_type)) = context_param {
@@ -351,9 +365,15 @@ fn generate_impl(
                 #puml_literal
             }
 
-            /// Returns the HTML content visualizing the pipeline stages and their dependencies.
-            pub fn html_diagram() -> &'static str {
-                #html_literal
+            /// Builds the HTML content visualizing the pipeline, using a template embedded with include_str!.
+            /// Returns an owned String (not &'static str) since we perform placeholder substitution.
+            pub fn html_diagram() -> String {
+                // Use the embedded template (from derive crate) as a literal.
+                let template: &str = #html_template_lit;
+                template
+                    .replace("{{PIPELINE_NAME}}", #pipeline_name_lit)
+                    .replace("{{NODES_JSON}}", #nodes_json_lit)
+                    .replace("{{EDGES_JSON}}", #edges_json_lit)
             }
 
             /// Writes the HTML diagram to the specified file path.
@@ -489,8 +509,7 @@ fn generate_compute_calls(
             })
             .collect::<Vec<_>>();
 
-        // Determine whether the stage returns a Result.  If so, use `?` to
-        // propagate errors; otherwise just call it.
+        // Determine whether the stage returns a Result.  If so, use `?` to propagate errors; otherwise just call it.
         let returns_result = matches!(
             &stage.sig.output,
             syn::ReturnType::Type(_, ty) if is_result_type(ty)
@@ -602,6 +621,7 @@ fn topological_sort(stages: &HashMap<Ident, StageInfo>) -> syn::Result<Vec<Ident
 
     Ok(sorted)
 }
+
 fn generate_puml(stages: &[ItemFn], context_name: Option<&Ident>) -> String {
     use std::collections::HashSet;
 
@@ -676,7 +696,7 @@ fn generate_puml(stages: &[ItemFn], context_name: Option<&Ident>) -> String {
     puml
 }
 
-fn generate_html(pipeline_name: &str, stages: &[ItemFn], context_name: Option<&Ident>) -> String {
+fn generate_html_data(stages: &[ItemFn], context_name: Option<&Ident>) -> (String, String) {
     use serde_json::json;
     use std::collections::HashSet;
 
@@ -686,9 +706,6 @@ fn generate_html(pipeline_name: &str, stages: &[ItemFn], context_name: Option<&I
 
     // Keep track of variables to avoid duplicates
     let mut variables = HashSet::new();
-
-    // Keep track of variables that are outputs (written to)
-    let mut output_vars = HashSet::new();
 
     for stage in stages {
         let stage_name = stage.sig.ident.to_string();
@@ -736,7 +753,6 @@ fn generate_html(pipeline_name: &str, stages: &[ItemFn], context_name: Option<&I
                         "to": vis_var_name,
                         "arrows": "to"
                     }));
-                    output_vars.insert(var_name.clone());
                 } else {
                     // Stage consumes Variable (Edge from Variable to Stage)
                     edges.push(json!({
@@ -749,142 +765,12 @@ fn generate_html(pipeline_name: &str, stages: &[ItemFn], context_name: Option<&I
         }
     }
 
-    // Generate the HTML content (matching your version)
-    let html_content = format!(
-        r###"
-<html lang="en">
-<head>
-    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.18.1/vis.min.js"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/vis/4.18.1/vis.min.css" rel="stylesheet" type="text/css"/>
-    <link rel="shortcut icon" href="#"/>
-</head>
-
-<body>
-<script type="text/javascript">
-    function showhideclass(id) {{
-        var elements = document.getElementsByClassName(id)
-        for (var i = 0; i < elements.length; i++) {{
-            elements[i].style.display = (elements[i].style.display != 'none') ? 'none' : 'block';
-        }}
-    }}
-</script>
-<style>
-    @media print {{
-        .noPrint {{
-            display: none;
-        }}
-    }}
-
-    .button {{
-        background-color: #5555cc;
-        border: none;
-        color: white;
-        padding: 5px 10px;
-        text-align: center;
-        text-decoration: none;
-        display: inline-block;
-        font-size: 18px;
-    }}
-</style>
-
-<div style="width: 100%;">
-    <div id="mynetwork" style="float:left; width: 70%;"></div>
-    <div style="float:right;width:30%;">
-        <div id="details" style="padding:10;" class="noPrint">Pipeline:{pipeline_name}</div>
-        <button onclick="javascript:showhideclass('controls')" class="button noPrint">
-            Show / hide graph controls
-        </button>
-        <div id="controls" class="controls" style="padding:5; display:none"></div>
-    </div>
-</div>
-<div style="clear:both"></div>
-
-<script type="text/javascript">
-            let deal = "MyPipeline";
-            let maxModelLevel = 0;
-            let nd = {{}};
-            var groups = {{
-                model: {{shape: 'box', color: {{background: 'yellow'}}}},
-                ins_data: {{color: {{background: 'lightgreen'}}}},
-                ares_volatility_subscriber: {{color: {{background: 'pink'}}}},
-                multi_contract_data: {{color: {{background: 'lightsteelblue'}}}},
-                multi_instrument_data: {{color: {{background: 'cyan'}}}},
-                alpha: {{shape: 'ellipse', color: {{background: 'lightblue'}}}}
-            }};
-            var nodes = new vis.DataSet({});
-            var edges = new vis.DataSet({});
-
-            // Create the network graph
-            let container = document.getElementById('mynetwork');
-            var controls = document.getElementById('controls');
-            var options = {{
-                groups: groups,
-                autoResize: true,
-                locale: 'en',
-                edges: {{
-                    arrows: {{to: {{enabled: true}}}},
-                    smooth: {{enabled: false}}
-                }},
-                nodes: {{
-                    font: {{'face': 'monospace', 'align': 'left'}}
-                }},
-                layout: {{
-                    "hierarchical": {{
-                        "enabled": true,
-                        "sortMethod": "directed",
-                        "direction": "LR",
-                        levelSeparation: 275,
-                        nodeSpacing: 70,
-                        treeSpacing: 15
-                    }}
-                }},
-                physics: {{
-                    enabled: false,
-                }},
-                configure: {{
-                    enabled: true,
-                    filter: 'layout physics',
-                    showButton: false,
-                    container: controls
-                }}
-            }};
-            document.getElementById("details").innerHTML = "<b>Deal</b>: " + deal;
-
-            let network = new vis.Network(container, {{nodes, edges}}, options);
-            network.setSize('1000px', '70%');
-            network.redraw();
-            network.on('click', function (properties) {{
-                var ids = properties.nodes;
-                var clickedNodes = nodes.get(ids);
-                var control = document.getElementById("details");
-                if (clickedNodes[0]) {{
-                    control.innerHTML = clickedNodes[0].fulllabel;
-                }}
-                else {{
-                    control.innerHTML = "<b>Pipeline</b>: " + pipeline_name;
-                }}
-            }});
-</script>
-</body>
-<footer>
-    <div class="container-fluid">
-        <div class="info">
-            <p>
-                Pipeline dependencies graph
-            </p>
-        </div>
-    </div>
-</footer>
-</html>
-"###,
+    (
         serde_json::to_string(&nodes).unwrap(),
-        serde_json::to_string(&edges).unwrap()
-    );
-
-    html_content
+        serde_json::to_string(&edges).unwrap(),
+    )
 }
 
-// generate_puml and generate_html remain unchanged
 #[proc_macro_attribute]
 pub fn stage(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // This attribute macro does nothing; it just returns the item unchanged.
