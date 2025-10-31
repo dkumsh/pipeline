@@ -1,13 +1,28 @@
-use anyhow::Error;
 use pipeline::value::Vector;
 #[allow(unused_imports)]
 use pipeline_derive::{pipeline, stage};
 use price_calc::*;
 use std::fs;
 
+#[derive(Debug, thiserror::Error)]
+pub enum AppError {
+    #[error(transparent)]
+    Pipeline(#[from] pipeline::Error), // so Reset errors map into AppError
+    #[error(transparent)]
+    Io(#[from] std::io::Error), // used by write_html_to_file in main()
+    #[error("bad data: {0}")]
+    BadData(String),
+}
+
 #[allow(unused_variables)]
-#[pipeline(name = "MyPipeline", args = "config", context = "ctx")]
+#[pipeline(
+    name = "MyPipeline",
+    args = "config",
+    context = "ctx",
+    error = "AppError"
+)]
 pub mod price_calc {
+    use super::AppError;
     use crate::{Config, Context, Mid, TopOfBook};
     use pipeline::value::Vector;
 
@@ -15,7 +30,7 @@ pub mod price_calc {
     use pipeline_derive::{pipeline, stage};
 
     #[stage]
-    pub fn print_mid(config: &Config, mid: &Vector<Mid>) -> anyhow::Result<()> {
+    pub fn print_mid(config: &Config, mid: &Vector<Mid>) -> Result<(), AppError> {
         // stage logic here
         Ok(())
     }
@@ -27,7 +42,7 @@ pub mod price_calc {
         ctx: &mut Context,
         tob: &Vector<TopOfBook>,
         mid: &mut Vector<Mid>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), AppError> {
         // stage logic here
         Ok(())
     }
@@ -44,7 +59,7 @@ pub struct TopOfBook();
 #[derive(Default)]
 pub struct Mid();
 
-fn main() -> anyhow::Result<(), Error> {
+fn main() -> Result<(), AppError> {
     let config = Config::default();
     let mut context = Context::default();
     let pipeline = MyPipeline::new(config);

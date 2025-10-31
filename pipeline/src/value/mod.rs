@@ -46,9 +46,10 @@ impl<T> Value<T> {
 
     pub fn touch(&mut self) {
         if let State::Value(_) = self.state
-            && let State::Value(v) = std::mem::replace(&mut self.state, State::Uninitialised) {
-                self.state = State::Updated(v);
-            }
+            && let State::Value(v) = std::mem::replace(&mut self.state, State::Uninitialised)
+        {
+            self.state = State::Updated(v);
+        }
     }
 
     pub fn is_updated(&self) -> bool {
@@ -63,9 +64,10 @@ impl<T> Value<T> {
 impl<T> Reset for Value<T> {
     fn reset(&mut self) -> Result<(), Error> {
         if let State::Updated(_) = self.state
-            && let State::Updated(v) = std::mem::replace(&mut self.state, State::Uninitialised) {
-                self.state = State::Value(v);
-            }
+            && let State::Updated(v) = std::mem::replace(&mut self.state, State::Uninitialised)
+        {
+            self.state = State::Value(v);
+        }
         Ok(())
     }
 }

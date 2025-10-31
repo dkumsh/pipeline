@@ -56,6 +56,11 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Collect the names of variables written by any stage.  Only these need resetting.
     let output_vars = collect_outputs(&stages, context_name.as_ref());
 
+    // Determine error type: user-specified or default to pipeline::Error
+    let error_ty = attr_args.error_ty.clone().unwrap_or_else(|| {
+        syn::parse_str::<Type>("pipeline::Error").expect("Failed to parse default error type")
+    });
+
     // Generate the PUML Diagram Content
     let puml_content = generate_puml(&stages, context_name.as_ref());
 
@@ -76,6 +81,7 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
         &html_content,
         context_param.as_ref(),
         &output_vars,
+        &error_ty,
     );
 
     // Reconstruct the module with stages unmodified
@@ -95,6 +101,7 @@ struct PipelineArgs {
     name: Ident,
     args: Vec<Ident>,
     context_name: Option<Ident>,
+    error_ty: Option<Type>,
 }
 
 impl Parse for PipelineArgs {
@@ -102,6 +109,7 @@ impl Parse for PipelineArgs {
         let mut name = None;
         let mut args = Vec::new();
         let mut context_name = None;
+        let mut error_ty = None;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -119,10 +127,14 @@ impl Parse for PipelineArgs {
             } else if key == "context" {
                 let value: LitStr = input.parse()?;
                 context_name = Some(format_ident!("{}", value.value()));
+            } else if key == "error" {
+                let value: LitStr = input.parse()?;
+                // Parse the error type from the provided string
+                error_ty = Some(syn::parse_str::<Type>(&value.value())?);
             } else {
                 return Err(syn::Error::new_spanned(
                     key,
-                    "Expected 'name', 'args', or 'context' in pipeline attribute",
+                    "Expected 'name', 'args', 'context' or 'error' in pipeline attribute",
                 ));
             }
             if input.peek(syn::Token![,]) {
@@ -141,6 +153,7 @@ impl Parse for PipelineArgs {
             name,
             args,
             context_name,
+            error_ty,
         })
     }
 }
@@ -151,9 +164,10 @@ fn extract_stages(module: &mut ItemMod) -> Vec<ItemFn> {
     if let Some((_, items)) = &mut module.content {
         for item in items.iter_mut() {
             if let syn::Item::Fn(func) = item
-                && func.attrs.iter().any(|attr| attr.path().is_ident("stage")) {
-                    stages.push(func.clone());
-                }
+                && func.attrs.iter().any(|attr| attr.path().is_ident("stage"))
+            {
+                stages.push(func.clone());
+            }
         }
     }
 
@@ -167,9 +181,10 @@ fn infer_context_type(stages: &[ItemFn], context_name: &Ident) -> Option<Type> {
         for input in &stage.sig.inputs {
             if let FnArg::Typed(PatType { pat, ty, .. }) = input
                 && let syn::Pat::Ident(pat_ident) = &**pat
-                    && &pat_ident.ident == context_name {
-                        return Some((**ty).clone());
-                    }
+                && &pat_ident.ident == context_name
+            {
+                return Some((**ty).clone());
+            }
         }
     }
     None
@@ -184,24 +199,25 @@ fn collect_fields(
     for stage in stages {
         for input in &stage.sig.inputs {
             if let FnArg::Typed(PatType { pat, ty, .. }) = input
-                && let syn::Pat::Ident(pat_ident) = &**pat {
-                    let ident = pat_ident.ident.clone();
+                && let syn::Pat::Ident(pat_ident) = &**pat
+            {
+                let ident = pat_ident.ident.clone();
 
-                    // Skip the context parameter
-                    if Some(&ident) == context_name {
-                        continue;
-                    }
-
-                    // Extract the underlying type (dereference references)
-                    let ty = match &**ty {
-                        Type::Reference(type_ref) => (*type_ref.elem).clone(),
-                        _ => (**ty).clone(),
-                    };
-
-                    fields_map
-                        .entry(ident.to_string())
-                        .or_insert((ident.clone(), ty));
+                // Skip the context parameter
+                if Some(&ident) == context_name {
+                    continue;
                 }
+
+                // Extract the underlying type (dereference references)
+                let ty = match &**ty {
+                    Type::Reference(type_ref) => (*type_ref.elem).clone(),
+                    _ => (**ty).clone(),
+                };
+
+                fields_map
+                    .entry(ident.to_string())
+                    .or_insert((ident.clone(), ty));
+            }
         }
     }
 
@@ -245,6 +261,7 @@ fn generate_impl(
     html_content: &str, // Receive the HTML content
     context_param: Option<&(Ident, Type)>,
     output_vars: &HashSet<String>,
+    error_ty: &Type,
 ) -> proc_macro2::TokenStream {
     let constructor_params: Vec<_> = constructor_args
         .iter()
@@ -281,7 +298,10 @@ fn generate_impl(
         .filter_map(|(ident, _)| {
             let name = ident.to_string();
             if output_vars.contains(&name) {
-                Some(quote! { Reset::reset(&mut self.#ident)?; })
+                Some(quote! {
+                    Reset::reset(&mut self.#ident)
+                        .map_err(|e| -> #error_ty { e.into() })?;
+                })
             } else {
                 None
             }
@@ -313,14 +333,15 @@ fn generate_impl(
             }
 
             /// Executes all stages in topological order, propagating any errors.
-            pub fn compute(#compute_params) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            pub fn compute(#compute_params) -> Result<(), #error_ty> {
                 #(#compute_calls)*
                 self.reset()?;
                 Ok(())
             }
+
             /// Resets the update flags on all mutated fields.  Errors from
             /// the `Reset` trait are propagated to the caller.
-            pub fn reset(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            pub fn reset(&mut self) -> Result<(), #error_ty> {
                 #(#reset_calls)*
                 Ok(())
             }
@@ -362,41 +383,42 @@ fn generate_compute_calls(
 
         for input in &stage.sig.inputs {
             if let FnArg::Typed(PatType { pat, ty, .. }) = input
-                && let syn::Pat::Ident(pat_ident) = &**pat {
-                    let var_name = pat_ident.ident.to_string();
+                && let syn::Pat::Ident(pat_ident) = &**pat
+            {
+                let var_name = pat_ident.ident.to_string();
 
-                    // Skip context parameter
-                    if Some(&pat_ident.ident) == context_name {
-                        continue;
-                    }
+                // Skip context parameter
+                if Some(&pat_ident.ident) == context_name {
+                    continue;
+                }
 
-                    match &**ty {
-                        Type::Reference(syn::TypeReference { mutability, .. }) => {
-                            if mutability.is_some() {
-                                // Mutable reference - variable is written
-                                if let Some(existing_writer) = var_writers.get(&var_name) {
-                                    let error = syn::Error::new(
-                                        input.span(),
-                                        format!(
-                                            "Variable '{}' is written by multiple functions: '{}' and '{}'",
-                                            var_name, existing_writer, stage.sig.ident
-                                        ),
-                                    );
-                                    return Err(error);
-                                }
-                                var_writers.insert(var_name.clone(), stage.sig.ident.clone());
-                                output_vars.insert(var_name);
-                            } else {
-                                // Immutable reference - variable is read
-                                input_vars.insert(var_name);
+                match &**ty {
+                    Type::Reference(syn::TypeReference { mutability, .. }) => {
+                        if mutability.is_some() {
+                            // Mutable reference - variable is written
+                            if let Some(existing_writer) = var_writers.get(&var_name) {
+                                let error = syn::Error::new(
+                                    input.span(),
+                                    format!(
+                                        "Variable '{}' is written by multiple functions: '{}' and '{}'",
+                                        var_name, existing_writer, stage.sig.ident
+                                    ),
+                                );
+                                return Err(error);
                             }
-                        }
-                        _ => {
-                            // Not a reference, treat as read
+                            var_writers.insert(var_name.clone(), stage.sig.ident.clone());
+                            output_vars.insert(var_name);
+                        } else {
+                            // Immutable reference - variable is read
                             input_vars.insert(var_name);
                         }
                     }
+                    _ => {
+                        // Not a reference, treat as read
+                        input_vars.insert(var_name);
+                    }
                 }
+            }
         }
 
         stage_infos.insert(
@@ -414,9 +436,10 @@ fn generate_compute_calls(
     for stage_info in stage_infos.values_mut() {
         for input_var in &stage_info.inputs {
             if let Some(writer_func) = var_writers.get(input_var)
-                && writer_func != &stage_info.name {
-                    stage_info.dependencies.insert(writer_func.clone());
-                }
+                && writer_func != &stage_info.name
+            {
+                stage_info.dependencies.insert(writer_func.clone());
+            }
         }
     }
 
@@ -488,9 +511,10 @@ fn generate_compute_calls(
 /// Returns true if the provided type is a `Result<_, _>`.
 fn is_result_type(ty: &Type) -> bool {
     if let Type::Path(type_path) = ty
-        && let Some(segment) = type_path.path.segments.last() {
-            return segment.ident == "Result";
-        }
+        && let Some(segment) = type_path.path.segments.last()
+    {
+        return segment.ident == "Result";
+    }
     false
 }
 
@@ -504,17 +528,19 @@ fn collect_outputs(
     for stage in stages {
         for input in &stage.sig.inputs {
             if let FnArg::Typed(PatType { pat, ty, .. }) = input
-                && let syn::Pat::Ident(pat_ident) = &**pat {
-                    // Skip context parameter
-                    if Some(&pat_ident.ident) == context_name {
-                        continue;
-                    }
-                    // Mutable references are outputs
-                    if let Type::Reference(type_ref) = &**ty
-                        && type_ref.mutability.is_some() {
-                            outputs.insert(pat_ident.ident.to_string());
-                        }
+                && let syn::Pat::Ident(pat_ident) = &**pat
+            {
+                // Skip context parameter
+                if Some(&pat_ident.ident) == context_name {
+                    continue;
                 }
+                // Mutable references are outputs
+                if let Type::Reference(type_ref) = &**ty
+                    && type_ref.mutability.is_some()
+                {
+                    outputs.insert(pat_ident.ident.to_string());
+                }
+            }
         }
     }
     outputs
@@ -576,7 +602,6 @@ fn topological_sort(stages: &HashMap<Ident, StageInfo>) -> syn::Result<Vec<Ident
 
     Ok(sorted)
 }
-
 fn generate_puml(stages: &[ItemFn], context_name: Option<&Ident>) -> String {
     use std::collections::HashSet;
 
@@ -611,39 +636,38 @@ fn generate_puml(stages: &[ItemFn], context_name: Option<&Ident>) -> String {
 
         for input in &stage.sig.inputs {
             if let FnArg::Typed(PatType { pat, ty, .. }) = input
-                && let syn::Pat::Ident(pat_ident) = &**pat {
-                    // Skip context parameter
-                    if Some(&pat_ident.ident) == context_name {
-                        continue;
-                    }
-
-                    let var_name = pat_ident.ident.to_string();
-
-                    // Prefix variable names with a dollar sign
-                    let puml_var_name = format!("${}", var_name);
-
-                    // Add the variable as a node with <<Variable>> stereotype if not already added
-                    if variables.insert(var_name.clone()) {
-                        puml.push_str(&format!("class \"{}\" <<Variable>>\n", puml_var_name));
-                    }
-
-                    // Determine the direction of the relationship
-                    let is_mut = match &**ty {
-                        Type::Reference(syn::TypeReference { mutability, .. }) => {
-                            mutability.is_some()
-                        }
-                        _ => false,
-                    };
-
-                    // Add relationship between the stage and the variable
-                    if is_mut {
-                        // Stage produces Variable (Stage --> Variable)
-                        puml.push_str(&format!("{} --> \"{}\"\n", stage_name, puml_var_name));
-                    } else {
-                        // Stage consumes Variable (Variable --> Stage)
-                        puml.push_str(&format!("\"{}\" --> {}\n", puml_var_name, stage_name));
-                    }
+                && let syn::Pat::Ident(pat_ident) = &**pat
+            {
+                // Skip context parameter
+                if Some(&pat_ident.ident) == context_name {
+                    continue;
                 }
+
+                let var_name = pat_ident.ident.to_string();
+
+                // Prefix variable names with a dollar sign
+                let puml_var_name = format!("${}", var_name);
+
+                // Add the variable as a node with <<Variable>> stereotype if not already added
+                if variables.insert(var_name.clone()) {
+                    puml.push_str(&format!("class \"{}\" <<Variable>>\n", puml_var_name));
+                }
+
+                // Determine the direction of the relationship
+                let is_mut = match &**ty {
+                    Type::Reference(syn::TypeReference { mutability, .. }) => mutability.is_some(),
+                    _ => false,
+                };
+
+                // Add relationship between the stage and the variable
+                if is_mut {
+                    // Stage produces Variable (Stage --> Variable)
+                    puml.push_str(&format!("{} --> \"{}\"\n", stage_name, puml_var_name));
+                } else {
+                    // Stage consumes Variable (Variable --> Stage)
+                    puml.push_str(&format!("\"{}\" --> {}\n", puml_var_name, stage_name));
+                }
+            }
         }
     }
 
@@ -678,51 +702,50 @@ fn generate_html(pipeline_name: &str, stages: &[ItemFn], context_name: Option<&I
 
         for input in &stage.sig.inputs {
             if let FnArg::Typed(PatType { pat, ty, .. }) = input
-                && let syn::Pat::Ident(pat_ident) = &**pat {
-                    // Skip context parameter
-                    if Some(&pat_ident.ident) == context_name {
-                        continue;
-                    }
-
-                    let var_name = pat_ident.ident.to_string();
-
-                    // Prefix variable names with a dollar sign to distinguish them
-                    let vis_var_name = format!("${}", var_name);
-
-                    // Add the variable as a node if not already added
-                    if variables.insert(var_name.clone()) {
-                        nodes.push(json!({
-                            "id": vis_var_name,
-                            "label": var_name,
-                            "group": "variable"
-                        }));
-                    }
-
-                    // Determine the direction of the relationship
-                    let is_mut = match &**ty {
-                        Type::Reference(syn::TypeReference { mutability, .. }) => {
-                            mutability.is_some()
-                        }
-                        _ => false,
-                    };
-
-                    if is_mut {
-                        // Stage produces Variable (Edge from Stage to Variable)
-                        edges.push(json!({
-                            "from": stage_name,
-                            "to": vis_var_name,
-                            "arrows": "to"
-                        }));
-                        output_vars.insert(var_name.clone());
-                    } else {
-                        // Stage consumes Variable (Edge from Variable to Stage)
-                        edges.push(json!({
-                            "from": vis_var_name,
-                            "to": stage_name,
-                            "arrows": "to"
-                        }));
-                    }
+                && let syn::Pat::Ident(pat_ident) = &**pat
+            {
+                // Skip context parameter
+                if Some(&pat_ident.ident) == context_name {
+                    continue;
                 }
+
+                let var_name = pat_ident.ident.to_string();
+
+                // Prefix variable names with a dollar sign to distinguish them
+                let vis_var_name = format!("${}", var_name);
+
+                // Add the variable as a node if not already added
+                if variables.insert(var_name.clone()) {
+                    nodes.push(json!({
+                        "id": vis_var_name,
+                        "label": var_name,
+                        "group": "variable"
+                    }));
+                }
+
+                // Determine the direction of the relationship
+                let is_mut = match &**ty {
+                    Type::Reference(syn::TypeReference { mutability, .. }) => mutability.is_some(),
+                    _ => false,
+                };
+
+                if is_mut {
+                    // Stage produces Variable (Edge from Stage to Variable)
+                    edges.push(json!({
+                        "from": stage_name,
+                        "to": vis_var_name,
+                        "arrows": "to"
+                    }));
+                    output_vars.insert(var_name.clone());
+                } else {
+                    // Stage consumes Variable (Edge from Variable to Stage)
+                    edges.push(json!({
+                        "from": vis_var_name,
+                        "to": stage_name,
+                        "arrows": "to"
+                    }));
+                }
+            }
         }
     }
 
@@ -861,6 +884,7 @@ fn generate_html(pipeline_name: &str, stages: &[ItemFn], context_name: Option<&I
     html_content
 }
 
+// generate_puml and generate_html remain unchanged
 #[proc_macro_attribute]
 pub fn stage(_attr: TokenStream, item: TokenStream) -> TokenStream {
     // This attribute macro does nothing; it just returns the item unchanged.
