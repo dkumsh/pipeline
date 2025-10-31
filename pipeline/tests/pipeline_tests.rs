@@ -97,7 +97,12 @@ mod order_mod {
     }
 
     #[pipeline::stage]
-    pub fn third(y: &u32, #[skip_reset] z: &mut u32) -> Result<(), TestErr> {
+    pub fn third(
+        y: &u32,
+        #[unused]
+        #[skip_reset]
+        z: &mut u32,
+    ) -> Result<(), TestErr> {
         CALLS.with(|c| c.borrow_mut().push("third"));
         *z = *y + 1;
         Ok(())
@@ -161,7 +166,11 @@ mod err_mod {
     // no explicit imports needed in this module; macros are resolved via `pipeline` re-export
 
     #[pipeline::stage]
-    pub fn fail(#[skip_reset] _x: &mut u32) -> Result<(), TestErr> {
+    pub fn fail(
+        #[unused]
+        #[skip_reset]
+        _x: &mut u32,
+    ) -> Result<(), TestErr> {
         Err(TestErr::Custom)
     }
 }
@@ -197,7 +206,13 @@ mod complex_mod {
     }
 
     #[pipeline::stage]
-    pub fn c(x: &u32, y: &u32, #[skip_reset] z: &mut u32) -> Result<(), TestErr> {
+    pub fn c(
+        x: &u32,
+        y: &u32,
+        #[unused]
+        #[skip_reset]
+        z: &mut u32,
+    ) -> Result<(), TestErr> {
         CALLS.with(|c| c.borrow_mut().push("c"));
         *z = *x + *y;
         Ok(())
@@ -232,7 +247,12 @@ mod mixed_mod {
     use pipeline::value::Vector;
 
     #[pipeline::stage]
-    pub fn generate(#[skip_reset] count: &mut u32, data: &mut Vector<u32>) -> Result<(), TestErr> {
+    pub fn generate(
+        #[unused]
+        #[skip_reset]
+        count: &mut u32,
+        #[unused] data: &mut Vector<u32>,
+    ) -> Result<(), TestErr> {
         // push the current count then increment it
         data.push(*count);
         *count += 1;
@@ -240,7 +260,7 @@ mod mixed_mod {
     }
 
     #[pipeline::stage]
-    pub fn read(_data: &Vector<u32>) -> Result<(), TestErr> {
+    pub fn read(#[unused] _data: &Vector<u32>) -> Result<(), TestErr> {
         // do nothing; ensures the pipeline reads the vector
         Ok(())
     }
@@ -273,7 +293,12 @@ mod mp_mod {
     use super::{CALLS, TestErr};
 
     #[pipeline::stage]
-    pub fn produce_xy(#[skip_reset] x: &mut u32, #[skip_reset] y: &mut u32) -> Result<(), TestErr> {
+    pub fn produce_xy(
+        #[unused]
+        #[skip_reset]
+        x: &mut u32,
+        #[skip_reset] y: &mut u32,
+    ) -> Result<(), TestErr> {
         CALLS.with(|c| c.borrow_mut().push("produce_xy"));
         *x = 2;
         *y = 3;
@@ -288,7 +313,13 @@ mod mp_mod {
     }
 
     #[pipeline::stage]
-    pub fn consume_yz(y: &u32, z: &u32, #[skip_reset] w: &mut u32) -> Result<(), TestErr> {
+    pub fn consume_yz(
+        y: &u32,
+        z: &u32,
+        #[unused]
+        #[skip_reset]
+        w: &mut u32,
+    ) -> Result<(), TestErr> {
         CALLS.with(|c| c.borrow_mut().push("consume_yz"));
         *w = *y + *z;
         Ok(())
@@ -339,6 +370,7 @@ mod ren_multi_mod {
     pub fn sum_fields(
         x: &u32,
         y: &u32,
+        #[unused]
         #[rename = "sum"]
         #[skip_reset]
         s_alias: &mut u32,

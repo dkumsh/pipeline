@@ -26,7 +26,7 @@ github.com
 
   2. _**Compile‑time safety and ergonomics**_
 
-     * Improve diagnostic messages further: report unused outputs, missing inputs and ambiguous variable names with spans pointing to parameters.
+     * ~~Improve diagnostic messages further: report unused outputs, missing inputs and ambiguous variable names with spans pointing to parameters.~~
 
      * ~~Allow optional parameter attributes (e.g. #[rename = "field_name"]) for cases where variable names in functions differ from field names in the pipeline context.~~
 

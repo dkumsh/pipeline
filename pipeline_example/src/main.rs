@@ -36,10 +36,10 @@ pub mod calculator {
 
     #[stage]
     pub fn mid(
-        mid_state: &(),
+        #[unused] mid_state: &(),
         config: &Config,
         ctx: &mut Context,
-        tob: &Vector<TopOfBook>,
+        #[unused] tob: &Vector<TopOfBook>,
         mid: &mut Vector<Mid>,
     ) -> Result<(), AppError> {
         // stage logic here
