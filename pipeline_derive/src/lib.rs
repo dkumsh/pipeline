@@ -52,7 +52,13 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
     let (fields, field_names, pipeline_vars) = collect_fields(&stages, context_name.as_ref());
 
     // Perform Dependency Analysis and Topological Sort
-    let compute_calls = match generate_compute_calls(&stages, context_name.as_ref(), &mod_ident) {
+    // Pass constructor_args into generate_compute_calls so it can detect missing inputs.
+    let compute_calls = match generate_compute_calls(
+        &stages,
+        context_name.as_ref(),
+        &mod_ident,
+        &constructor_args,
+    ) {
         Ok(calls) => calls,
         Err(e) => return e.to_compile_error().into(),
     };
@@ -220,11 +226,7 @@ fn collect_fields(
                 // Determine the pipeline field name to bind to:
                 //   - prefer #[rename(...)]
                 //   - else use the parameter's local name
-                let target_ident = if let Some(new_name) = get_rename_attr(attrs) {
-                    format_ident!("{}", new_name)
-                } else {
-                    pat_ident.ident.clone()
-                };
+                let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
 
                 // Extract the underlying type (dereference references)
                 let ty = match &**ty {
@@ -398,10 +400,19 @@ fn generate_compute_calls(
     stages: &[ItemFn],
     context_name: Option<&Ident>,
     mod_ident: &Ident,
+    constructor_args: &[Ident],
 ) -> syn::Result<Vec<proc_macro2::TokenStream>> {
+    // Maps pipeline field -> stage that writes it
     let mut var_writers: HashMap<String, Ident> = HashMap::new();
+    // Track span of each writer parameter for better unused-output errors
+    let mut writer_spans: HashMap<String, Span> = HashMap::new();
+    // Tracks all read variables and their first occurrence span
+    let mut read_spans: HashMap<String, Span> = HashMap::new();
     let mut stage_infos: HashMap<Ident, StageInfo> = HashMap::new();
+    let mut output_unused: HashSet<String> = HashSet::new();
+    let mut input_unused: HashSet<String> = HashSet::new();
 
+    // Collect read/write variables for each stage and detect duplicate writers
     for stage in stages {
         let mut input_vars = HashSet::new();
         let mut output_vars = HashSet::new();
@@ -414,39 +425,44 @@ fn generate_compute_calls(
                 if Some(&pat_ident.ident) == context_name {
                     continue;
                 }
-
                 // Determine pipeline field name for this parameter
-                let target_ident = if let Some(new_name) = get_rename_attr(attrs) {
-                    format_ident!("{}", new_name)
-                } else {
-                    pat_ident.ident.clone()
-                };
+                let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
                 let var_name = target_ident.to_string();
+                let is_unused = has_unused_attr(attrs);
 
                 match &**ty {
+                    // &mut: writer
                     Type::Reference(syn::TypeReference { mutability, .. }) => {
                         if mutability.is_some() {
-                            // Written variable
+                            // Mutable reference — variable is written
                             if let Some(existing_writer) = var_writers.get(&var_name) {
-                                let error = syn::Error::new(
+                                return Err(syn::Error::new(
                                     input.span(),
                                     format!(
-                                        "Variable '{}' is written by multiple functions: '{}' and '{}'",
+                                        "variable '{}' is written by multiple stages: '{}' and '{}'",
                                         var_name, existing_writer, stage.sig.ident
                                     ),
-                                );
-                                return Err(error);
+                                ));
                             }
                             var_writers.insert(var_name.clone(), stage.sig.ident.clone());
-                            output_vars.insert(var_name);
+                            writer_spans.insert(var_name.clone(), input.span());
+                            output_vars.insert(var_name.clone());
+                            if is_unused {
+                                output_unused.insert(var_name.clone());
+                            }
                         } else {
-                            // Read variable
-                            input_vars.insert(var_name);
+                            // Immutable reference — variable is read
+                            input_vars.insert(var_name.clone());
+                            read_spans.entry(var_name.clone()).or_insert(input.span());
+                            if is_unused {
+                                input_unused.insert(var_name.clone());
+                            }
                         }
                     }
                     _ => {
-                        // Not a reference => treat as read
-                        input_vars.insert(var_name);
+                        // Non-reference => treat as read
+                        input_vars.insert(var_name.clone());
+                        read_spans.entry(var_name).or_insert(input.span());
                     }
                 }
             }
@@ -461,6 +477,26 @@ fn generate_compute_calls(
                 dependencies: HashSet::new(),
             },
         );
+    }
+
+    // Check for missing inputs: read variables not produced by any stage or passed via args/context
+    for (read_var, span) in &read_spans {
+        if input_unused.contains(read_var) {
+            continue; // user marked this as intentionally unused
+        }
+        let is_arg = constructor_args
+            .iter()
+            .any(|arg| arg == &format_ident!("{}", read_var));
+        let is_ctx = context_name.is_some_and(|c| c == &format_ident!("{}", read_var));
+        if !var_writers.contains_key(read_var) && !is_arg && !is_ctx {
+            return Err(syn::Error::new(
+                *span,
+                format!(
+                    "variable '{}' is read but never produced by any stage or passed via constructor args/context",
+                    read_var
+                ),
+            ));
+        }
     }
 
     // Build dependencies between stages
@@ -482,6 +518,26 @@ fn generate_compute_calls(
         .collect();
     let sorted_stages = topological_sort(&stage_infos, order_map)?;
 
+    // Report unused outputs: variables written but never read by any stage
+    let all_reads: std::collections::HashSet<String> = stage_infos
+        .values()
+        .flat_map(|s| s.inputs.iter().cloned())
+        .collect();
+    for (var_name, writer_stage) in &var_writers {
+        if !all_reads.contains(var_name)
+            && !output_unused.contains(var_name)
+            && let Some(span) = writer_spans.get(var_name)
+        {
+            return Err(syn::Error::new(
+                *span,
+                format!(
+                    "variable '{}' is written by stage '{}' but never read by any stage",
+                    var_name, writer_stage
+                ),
+            ));
+        }
+    }
+
     // Generate function calls in sorted order
     let mut compute_calls = Vec::new();
     for stage_name in sorted_stages {
@@ -499,7 +555,11 @@ fn generate_compute_calls(
                 if let FnArg::Typed(PatType { attrs, pat, ty, .. }) = input {
                     if let syn::Pat::Ident(pat_ident) = &**pat {
                         // Determine whether the parameter is mutable or not
-                        let is_mut = matches!(&**ty, Type::Reference(syn::TypeReference { mutability, .. }) if mutability.is_some());
+                        let is_mut = matches!(
+                            &**ty,
+                            Type::Reference(syn::TypeReference { mutability, .. })
+                                if mutability.is_some()
+                        );
 
                         // Context param is passed through as-is
                         if Some(&pat_ident.ident) == context_name {
@@ -507,11 +567,7 @@ fn generate_compute_calls(
                         }
 
                         // Use pipeline field name
-                        let target_ident = if let Some(new_name) = get_rename_attr(attrs) {
-                            format_ident!("{}", new_name)
-                        } else {
-                            pat_ident.ident.clone()
-                        };
+                        let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
 
                         if is_mut {
                             quote! { &mut self.#target_ident }
@@ -577,11 +633,7 @@ fn collect_outputs(
                         continue;
                     }
                     // existing: get the pipeline field name (respect #[rename])
-                    let target_ident = if let Some(new_name) = get_rename_attr(attrs) {
-                        format_ident!("{}", new_name)
-                    } else {
-                        pat_ident.ident.clone()
-                    };
+                    let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
                     outputs.insert(target_ident.to_string());
                 }
             }
@@ -681,11 +733,7 @@ fn generate_puml(stages: &[ItemFn], context_name: Option<&Ident>) -> String {
                 if Some(&pat_ident.ident) == context_name {
                     continue;
                 }
-                let target_ident = if let Some(new_name) = get_rename_attr(attrs) {
-                    format_ident!("{}", new_name)
-                } else {
-                    pat_ident.ident.clone()
-                };
+                let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
                 let var_name = target_ident.to_string();
                 let puml_var_name = format!("${}", var_name);
 
@@ -732,11 +780,7 @@ fn generate_html_data(stages: &[ItemFn], context_name: Option<&Ident>) -> (Strin
                 if Some(&pat_ident.ident) == context_name {
                     continue;
                 }
-                let target_ident = if let Some(new_name) = get_rename_attr(attrs) {
-                    format_ident!("{}", new_name)
-                } else {
-                    pat_ident.ident.clone()
-                };
+                let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
                 let var_name = target_ident.to_string();
                 let vis_var_name = format!("${}", var_name);
 
@@ -775,6 +819,7 @@ pub fn stage(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 let last = attr.path().segments.last().map(|s| &s.ident);
                 last != Some(&Ident::new("rename", Span::call_site()))
                     && last != Some(&Ident::new("skip_reset", Span::call_site()))
+                    && last != Some(&Ident::new("unused", Span::call_site()))
             });
         }
     }
@@ -796,6 +841,30 @@ fn has_skip_reset_attr(attrs: &[Attribute]) -> bool {
             .last()
             .is_some_and(|seg| seg.ident == "skip_reset")
     })
+}
+
+fn has_unused_attr(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path()
+            .segments
+            .last()
+            .is_some_and(|seg| seg.ident == "unused")
+    })
+}
+
+fn normalized_target_ident(attrs: &[Attribute], pat_ident: &Ident) -> Ident {
+    if let Some(new_name) = get_rename_attr(attrs) {
+        return format_ident!("{}", new_name);
+    }
+    let s = pat_ident.to_string();
+    let trimmed = s.trim_start_matches('_');
+    if trimmed.is_empty() {
+        // Parameter is just "_" or "__": keep as-is so it won't accidentally
+        // alias anything. Users can use #[rename="..."] if they want linkage.
+        pat_ident.clone()
+    } else {
+        format_ident!("{}", trimmed)
+    }
 }
 
 // Import Spanned for error reporting
