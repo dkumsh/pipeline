@@ -2,25 +2,23 @@ extern crate proc_macro;
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
-    FnArg, Ident, ItemFn, ItemMod, LitStr, PatType, Type,
+    Attribute, Expr, ExprLit, FnArg, Ident, ItemFn, ItemMod, Lit, LitStr, Meta, MetaNameValue,
+    PatType, Type,
     parse::{Parse, ParseStream},
     parse_macro_input,
 };
-
 // Compile the template into the derive crate binary:
 const HTML_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/assets/pipeline_graph.html"
 ));
 
-// Import Spanned for error reporting
-use syn::spanned::Spanned;
-
 #[proc_macro_attribute]
 pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Parse the attribute arguments and the module item
     let attr_args = parse_macro_input!(attr as PipelineArgs);
     let mut module = parse_macro_input!(item as ItemMod);
+    let mod_ident = module.ident.clone();
 
     let pipeline_name = attr_args.name;
     let pipeline_name_str = quote! {#pipeline_name}.to_string();
@@ -54,7 +52,7 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
     let (fields, field_names, pipeline_vars) = collect_fields(&stages, context_name.as_ref());
 
     // Perform Dependency Analysis and Topological Sort
-    let compute_calls = match generate_compute_calls(&stages, context_name.as_ref()) {
+    let compute_calls = match generate_compute_calls(&stages, context_name.as_ref(), &mod_ident) {
         Ok(calls) => calls,
         Err(e) => return e.to_compile_error().into(),
     };
@@ -172,7 +170,7 @@ fn extract_stages(module: &mut ItemMod) -> Vec<ItemFn> {
     if let Some((_, items)) = &mut module.content {
         for item in items.iter_mut() {
             if let syn::Item::Fn(func) = item
-                && func.attrs.iter().any(|attr| attr.path().is_ident("stage"))
+                && func.attrs.iter().any(is_stage_attr)
             {
                 stages.push(func.clone());
             }
@@ -183,11 +181,15 @@ fn extract_stages(module: &mut ItemMod) -> Vec<ItemFn> {
 }
 
 use std::collections::{HashMap, HashSet};
+use syn::parse::Parser;
+use syn::punctuated::Punctuated;
 
 fn infer_context_type(stages: &[ItemFn], context_name: &Ident) -> Option<Type> {
     for stage in stages {
         for input in &stage.sig.inputs {
-            if let FnArg::Typed(PatType { pat, ty, .. }) = input
+            if let FnArg::Typed(PatType {
+                attrs: _, pat, ty, ..
+            }) = input
                 && let syn::Pat::Ident(pat_ident) = &**pat
                 && &pat_ident.ident == context_name
             {
@@ -206,15 +208,22 @@ fn collect_fields(
 
     for stage in stages {
         for input in &stage.sig.inputs {
-            if let FnArg::Typed(PatType { pat, ty, .. }) = input
+            if let FnArg::Typed(PatType { attrs, pat, ty, .. }) = input
                 && let syn::Pat::Ident(pat_ident) = &**pat
             {
-                let ident = pat_ident.ident.clone();
-
-                // Skip the context parameter
-                if Some(&ident) == context_name {
+                // Skip context parameter
+                if Some(&pat_ident.ident) == context_name {
                     continue;
                 }
+
+                // Determine the pipeline field name to bind to:
+                //   - prefer #[rename(...)]
+                //   - else use the parameter's local name
+                let target_ident = if let Some(new_name) = get_rename_attr(attrs) {
+                    format_ident!("{}", new_name)
+                } else {
+                    pat_ident.ident.clone()
+                };
 
                 // Extract the underlying type (dereference references)
                 let ty = match &**ty {
@@ -223,8 +232,8 @@ fn collect_fields(
                 };
 
                 fields_map
-                    .entry(ident.to_string())
-                    .or_insert((ident.clone(), ty));
+                    .entry(target_ident.to_string())
+                    .or_insert((target_ident, ty));
             }
         }
     }
@@ -233,7 +242,6 @@ fn collect_fields(
     fields.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
 
     let field_names = fields.iter().map(|(ident, _)| ident.clone()).collect();
-
     let pipeline_vars = fields.iter().map(|(ident, _)| ident.to_string()).collect();
 
     (fields, field_names, pipeline_vars)
@@ -389,33 +397,36 @@ fn generate_impl(
 fn generate_compute_calls(
     stages: &[ItemFn],
     context_name: Option<&Ident>,
+    mod_ident: &Ident,
 ) -> syn::Result<Vec<proc_macro2::TokenStream>> {
-    // Map of variable to the function that writes to it
     let mut var_writers: HashMap<String, Ident> = HashMap::new();
-
-    // Map of function name to StageInfo
     let mut stage_infos: HashMap<Ident, StageInfo> = HashMap::new();
 
-    // Collect read and write variables for each stage
     for stage in stages {
         let mut input_vars = HashSet::new();
         let mut output_vars = HashSet::new();
 
         for input in &stage.sig.inputs {
-            if let FnArg::Typed(PatType { pat, ty, .. }) = input
+            if let FnArg::Typed(PatType { attrs, pat, ty, .. }) = input
                 && let syn::Pat::Ident(pat_ident) = &**pat
             {
-                let var_name = pat_ident.ident.to_string();
-
                 // Skip context parameter
                 if Some(&pat_ident.ident) == context_name {
                     continue;
                 }
 
+                // Determine pipeline field name for this parameter
+                let target_ident = if let Some(new_name) = get_rename_attr(attrs) {
+                    format_ident!("{}", new_name)
+                } else {
+                    pat_ident.ident.clone()
+                };
+                let var_name = target_ident.to_string();
+
                 match &**ty {
                     Type::Reference(syn::TypeReference { mutability, .. }) => {
                         if mutability.is_some() {
-                            // Mutable reference - variable is written
+                            // Written variable
                             if let Some(existing_writer) = var_writers.get(&var_name) {
                                 let error = syn::Error::new(
                                     input.span(),
@@ -429,12 +440,12 @@ fn generate_compute_calls(
                             var_writers.insert(var_name.clone(), stage.sig.ident.clone());
                             output_vars.insert(var_name);
                         } else {
-                            // Immutable reference - variable is read
+                            // Read variable
                             input_vars.insert(var_name);
                         }
                     }
                     _ => {
-                        // Not a reference, treat as read
+                        // Not a reference => treat as read
                         input_vars.insert(var_name);
                     }
                 }
@@ -480,25 +491,27 @@ fn generate_compute_calls(
             .inputs
             .iter()
             .map(|input| {
-                if let FnArg::Typed(PatType { pat, ty, .. }) = input {
+                if let FnArg::Typed(PatType { attrs, pat, ty, .. }) = input {
                     if let syn::Pat::Ident(pat_ident) = &**pat {
-                        let ident = &pat_ident.ident;
-
                         // Determine whether the parameter is mutable or not
-                        let is_mut = match &**ty {
-                            Type::Reference(syn::TypeReference { mutability, .. }) => {
-                                mutability.is_some()
-                            }
-                            _ => false,
+                        let is_mut = matches!(&**ty, Type::Reference(syn::TypeReference { mutability, .. }) if mutability.is_some());
+
+                        // Context param is passed through as-is
+                        if Some(&pat_ident.ident) == context_name {
+                            return quote! { #pat_ident };
+                        }
+
+                        // Use pipeline field name
+                        let target_ident = if let Some(new_name) = get_rename_attr(attrs) {
+                            format_ident!("{}", new_name)
+                        } else {
+                            pat_ident.ident.clone()
                         };
 
-                        // Check if this is the context parameter
-                        if Some(ident) == context_name {
-                            quote! { #ident }
-                        } else if is_mut {
-                            quote! { &mut self.#ident }
+                        if is_mut {
+                            quote! { &mut self.#target_ident }
                         } else {
-                            quote! { &self.#ident }
+                            quote! { &self.#target_ident }
                         }
                     } else {
                         quote! {}
@@ -516,11 +529,10 @@ fn generate_compute_calls(
         );
 
         let call = if returns_result {
-            quote! { #stage_name(#(#args),*)?; }
+            quote! { #mod_ident::#stage_name(#(#args),*)?; }
         } else {
-            quote! { #stage_name(#(#args),*); }
+            quote! { #mod_ident::#stage_name(#(#args),*); }
         };
-
         compute_calls.push(call);
     }
 
@@ -546,18 +558,22 @@ fn collect_outputs(
     let mut outputs = HashSet::new();
     for stage in stages {
         for input in &stage.sig.inputs {
-            if let FnArg::Typed(PatType { pat, ty, .. }) = input
+            if let FnArg::Typed(PatType { attrs, pat, ty, .. }) = input
                 && let syn::Pat::Ident(pat_ident) = &**pat
             {
                 // Skip context parameter
                 if Some(&pat_ident.ident) == context_name {
                     continue;
                 }
-                // Mutable references are outputs
                 if let Type::Reference(type_ref) = &**ty
                     && type_ref.mutability.is_some()
                 {
-                    outputs.insert(pat_ident.ident.to_string());
+                    let target_ident = if let Some(new_name) = get_rename_attr(attrs) {
+                        format_ident!("{}", new_name)
+                    } else {
+                        pat_ident.ident.clone()
+                    };
+                    outputs.insert(target_ident.to_string());
                 }
             }
         }
@@ -628,7 +644,7 @@ fn generate_puml(stages: &[ItemFn], context_name: Option<&Ident>) -> String {
     let mut puml = String::new();
     puml.push_str("@startuml\n");
     puml.push_str("skinparam linetype ortho\n");
-    puml.push_str("left to right direction\n"); // Arrange nodes from left to right
+    puml.push_str("left to right direction\n");
 
     // Define styles for variables and stages using correct syntax
     puml.push_str("skinparam class {\n");
@@ -647,44 +663,33 @@ fn generate_puml(stages: &[ItemFn], context_name: Option<&Ident>) -> String {
     // Map variable names to their types
     let mut variables = HashSet::new();
 
-    // Collect variables and functions
     for stage in stages {
         let stage_name = stage.sig.ident.to_string();
-
-        // Add the stage as a node with <<Stage>> stereotype
         puml.push_str(&format!("class {} <<Stage>>\n", stage_name));
 
         for input in &stage.sig.inputs {
-            if let FnArg::Typed(PatType { pat, ty, .. }) = input
+            if let FnArg::Typed(PatType { attrs, pat, ty, .. }) = input
                 && let syn::Pat::Ident(pat_ident) = &**pat
             {
-                // Skip context parameter
                 if Some(&pat_ident.ident) == context_name {
                     continue;
                 }
-
-                let var_name = pat_ident.ident.to_string();
-
-                // Prefix variable names with a dollar sign
+                let target_ident = if let Some(new_name) = get_rename_attr(attrs) {
+                    format_ident!("{}", new_name)
+                } else {
+                    pat_ident.ident.clone()
+                };
+                let var_name = target_ident.to_string();
                 let puml_var_name = format!("${}", var_name);
 
-                // Add the variable as a node with <<Variable>> stereotype if not already added
                 if variables.insert(var_name.clone()) {
                     puml.push_str(&format!("class \"{}\" <<Variable>>\n", puml_var_name));
                 }
 
-                // Determine the direction of the relationship
-                let is_mut = match &**ty {
-                    Type::Reference(syn::TypeReference { mutability, .. }) => mutability.is_some(),
-                    _ => false,
-                };
-
-                // Add relationship between the stage and the variable
+                let is_mut = matches!(&**ty, Type::Reference(syn::TypeReference { mutability, .. }) if mutability.is_some());
                 if is_mut {
-                    // Stage produces Variable (Stage --> Variable)
                     puml.push_str(&format!("{} --> \"{}\"\n", stage_name, puml_var_name));
                 } else {
-                    // Stage consumes Variable (Variable --> Stage)
                     puml.push_str(&format!("\"{}\" --> {}\n", puml_var_name, stage_name));
                 }
             }
@@ -692,7 +697,6 @@ fn generate_puml(stages: &[ItemFn], context_name: Option<&Ident>) -> String {
     }
 
     puml.push_str("@enduml\n");
-
     puml
 }
 
@@ -700,17 +704,14 @@ fn generate_html_data(stages: &[ItemFn], context_name: Option<&Ident>) -> (Strin
     use serde_json::json;
     use std::collections::HashSet;
 
-    // Collect nodes and edges
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
-
-    // Keep track of variables to avoid duplicates
     let mut variables = HashSet::new();
+    let mut output_vars = HashSet::new();
 
     for stage in stages {
         let stage_name = stage.sig.ident.to_string();
 
-        // Add the stage as a node
         nodes.push(json!({
             "id": stage_name,
             "label": stage_name,
@@ -718,20 +719,20 @@ fn generate_html_data(stages: &[ItemFn], context_name: Option<&Ident>) -> (Strin
         }));
 
         for input in &stage.sig.inputs {
-            if let FnArg::Typed(PatType { pat, ty, .. }) = input
+            if let FnArg::Typed(PatType { attrs, pat, ty, .. }) = input
                 && let syn::Pat::Ident(pat_ident) = &**pat
             {
-                // Skip context parameter
                 if Some(&pat_ident.ident) == context_name {
                     continue;
                 }
-
-                let var_name = pat_ident.ident.to_string();
-
-                // Prefix variable names with a dollar sign to distinguish them
+                let target_ident = if let Some(new_name) = get_rename_attr(attrs) {
+                    format_ident!("{}", new_name)
+                } else {
+                    pat_ident.ident.clone()
+                };
+                let var_name = target_ident.to_string();
                 let vis_var_name = format!("${}", var_name);
 
-                // Add the variable as a node if not already added
                 if variables.insert(var_name.clone()) {
                     nodes.push(json!({
                         "id": vis_var_name,
@@ -740,26 +741,12 @@ fn generate_html_data(stages: &[ItemFn], context_name: Option<&Ident>) -> (Strin
                     }));
                 }
 
-                // Determine the direction of the relationship
-                let is_mut = match &**ty {
-                    Type::Reference(syn::TypeReference { mutability, .. }) => mutability.is_some(),
-                    _ => false,
-                };
-
+                let is_mut = matches!(&**ty, Type::Reference(syn::TypeReference { mutability, .. }) if mutability.is_some());
                 if is_mut {
-                    // Stage produces Variable (Edge from Stage to Variable)
-                    edges.push(json!({
-                        "from": stage_name,
-                        "to": vis_var_name,
-                        "arrows": "to"
-                    }));
+                    edges.push(json!({ "from": stage_name, "to": vis_var_name, "arrows": "to" }));
+                    output_vars.insert(var_name.clone());
                 } else {
-                    // Stage consumes Variable (Edge from Variable to Stage)
-                    edges.push(json!({
-                        "from": vis_var_name,
-                        "to": stage_name,
-                        "arrows": "to"
-                    }));
+                    edges.push(json!({ "from": vis_var_name, "to": stage_name, "arrows": "to" }));
                 }
             }
         }
@@ -773,6 +760,58 @@ fn generate_html_data(stages: &[ItemFn], context_name: Option<&Ident>) -> (Strin
 
 #[proc_macro_attribute]
 pub fn stage(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    // This attribute macro does nothing; it just returns the item unchanged.
-    item
+    // Parse the function, remove `rename` attributes from parameters, and emit it unchanged.
+    let mut func = parse_macro_input!(item as ItemFn);
+    for input in func.sig.inputs.iter_mut() {
+        if let FnArg::Typed(pat_type) = input {
+            pat_type
+                .attrs
+                .retain(|attr| !attr.path().is_ident("rename"));
+        }
+    }
+    TokenStream::from(quote! { #func })
+}
+
+fn is_stage_attr(attr: &syn::Attribute) -> bool {
+    attr.path()
+        .segments
+        .last()
+        .is_some_and(|seg| seg.ident == "stage")
+}
+// Import Spanned for error reporting
+use syn::spanned::Spanned;
+
+// Extracts #[rename = "field"] or #[rename("field")] into Some("field"), else None.
+fn get_rename_attr(attrs: &[Attribute]) -> Option<String> {
+    for attr in attrs {
+        if !attr.path().is_ident("rename") {
+            continue;
+        }
+
+        match &attr.meta {
+            // #[rename = "field"]
+            Meta::NameValue(MetaNameValue {
+                value:
+                    Expr::Lit(ExprLit {
+                        lit: Lit::Str(s), ..
+                    }),
+                ..
+            }) => {
+                return Some(s.value());
+            }
+            // #[rename("field")]  (tokens are the inside of the parens)
+            Meta::List(list) => {
+                // Parse the token stream as a comma-separated list of literals and
+                // take the first string literal.
+                let parser = Punctuated::<Lit, syn::Token![,]>::parse_terminated;
+                if let Ok(punct) = parser.parse2(list.tokens.clone())
+                    && let Some(Lit::Str(s)) = punct.first()
+                {
+                    return Some(s.value());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }

@@ -1,3 +1,5 @@
+pub use pipeline_derive::{pipeline, stage};
+
 pub mod value;
 use thiserror::Error;
 #[derive(Error, Debug, PartialEq)]
