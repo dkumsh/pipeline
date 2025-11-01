@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::{ClearUpdated, Error};
 
 pub mod vector;
 pub use vector::Vector;
@@ -9,9 +9,6 @@ pub enum State<T> {
     Uninitialised,
     Value(T),
     Updated(T),
-}
-pub trait Reset {
-    fn reset(&mut self) -> Result<(), Error>;
 }
 
 #[derive(Default)]
@@ -61,8 +58,9 @@ impl<T> Value<T> {
     }
 }
 
-impl<T> Reset for Value<T> {
-    fn reset(&mut self) -> Result<(), Error> {
+impl<T> ClearUpdated for Value<T> {
+    type Error = Error;
+    fn clear_updated(&mut self) -> Result<(), Error> {
         if let State::Updated(_) = self.state
             && let State::Updated(v) = std::mem::replace(&mut self.state, State::Uninitialised)
         {
@@ -114,7 +112,7 @@ mod tests {
         assert!(value.is_updated());
         assert_eq!(*value.get().unwrap(), 42);
 
-        assert!(value.reset().is_ok());
+        assert!(value.clear_updated().is_ok());
         assert!(!value.is_updated());
         assert_eq!(*value.get().unwrap(), 42);
 
@@ -132,7 +130,7 @@ mod tests {
     #[test]
     fn test_reset_uninitialised() {
         let mut value: Value<i32> = Value::new();
-        assert_eq!(value.reset(), Ok(()));
+        assert_eq!(value.clear_updated(), Ok(()));
         assert!(!value.has_value());
     }
 }

@@ -1,5 +1,5 @@
+use crate::ClearUpdated;
 use crate::Error;
-use crate::value::Reset;
 use bitvec::prelude::*;
 use std::vec::Vec;
 
@@ -183,8 +183,9 @@ impl<V> Vector<V> {
     }
 }
 
-impl<V> Reset for Vector<V> {
-    fn reset(&mut self) -> Result<(), Error> {
+impl<V> ClearUpdated for Vector<V> {
+    type Error = Error;
+    fn clear_updated(&mut self) -> Result<(), Error> {
         self.update_flags.clear();
         self.update_flags.resize(self.data.len(), false);
         self.indices.clear();
@@ -316,7 +317,7 @@ mod tests {
         assert_eq!(updated, vec![(0, 1), (1, 20), (2, 3)]);
 
         // Reset and check
-        vec.reset()?;
+        vec.clear_updated()?;
         assert!(!vec.is_updated());
         let updated: Vec<(usize, i32)> = vec.iter_updated().map(|(i, &v)| (i, v)).collect();
         assert!(updated.is_empty());
@@ -361,7 +362,7 @@ mod tests {
 
         assert!(vec.is_updated());
 
-        vec.reset()?;
+        vec.clear_updated()?;
         assert!(!vec.is_updated());
         assert!(!vec.all_updated());
         assert_eq!(vec.indices.len(), 0);
@@ -506,7 +507,7 @@ mod tests {
         assert!(vec.all_updated());
 
         // Reset
-        vec.reset()?;
+        vec.clear_updated()?;
         assert!(!vec.is_updated());
         assert!(!vec.all_updated());
 

@@ -314,13 +314,13 @@ fn generate_impl(
         .collect::<Vec<_>>();
 
     // Generate reset calls only for fields that are outputs (written by some stage)
-    let reset_calls: Vec<_> = fields
+    let clear_updated_calls: Vec<_> = fields
         .iter()
         .filter_map(|(ident, _)| {
             let name = ident.to_string();
             if output_vars.contains(&name) {
                 Some(quote! {
-                    ::pipeline::Reset::reset(&mut self.#ident)
+                    ::pipeline::ClearUpdated::clear_updated(&mut self.#ident)
                         .map_err(|e| -> #error_ty { e.into() })?;
                 })
             } else {
@@ -359,14 +359,14 @@ fn generate_impl(
             /// Executes all stages in topological order, propagating any errors.
             pub fn compute(#compute_params) -> Result<(), #error_ty> {
                 #(#compute_calls)*
-                self.reset()?;
+                self.clear_updated_all()?;
                 Ok(())
             }
 
-            /// Resets the update flags on all mutated fields.  Errors from
-            /// the `Reset` trait are propagated to the caller.
-            pub fn reset(&mut self) -> Result<(), #error_ty> {
-                #(#reset_calls)*
+            /// Clear the update flags on all mutated fields.  Errors from
+            /// the `ClearUpdated` trait are propagated to the caller.
+            pub fn clear_updated_all(&mut self) -> Result<(), #error_ty> {
+                #(#clear_updated_calls)*
                 Ok(())
             }
 
@@ -628,8 +628,8 @@ fn collect_outputs(
                 if let Type::Reference(type_ref) = &**ty
                     && type_ref.mutability.is_some()
                 {
-                    // skip resettable fields marked #[skip_reset]
-                    if has_skip_reset_attr(attrs) {
+                    // skip resettable fields marked #[skip_clear]
+                    if has_skip_clear_attr(attrs) {
                         continue;
                     }
                     // existing: get the pipeline field name (respect #[rename])
@@ -818,7 +818,7 @@ pub fn stage(_attr: TokenStream, item: TokenStream) -> TokenStream {
             pat_type.attrs.retain(|attr| {
                 let last = attr.path().segments.last().map(|s| &s.ident);
                 last != Some(&Ident::new("rename", Span::call_site()))
-                    && last != Some(&Ident::new("skip_reset", Span::call_site()))
+                    && last != Some(&Ident::new("skip_clear", Span::call_site()))
                     && last != Some(&Ident::new("unused", Span::call_site()))
             });
         }
@@ -833,13 +833,13 @@ fn is_stage_attr(attr: &syn::Attribute) -> bool {
         .is_some_and(|seg| seg.ident == "stage")
 }
 
-fn has_skip_reset_attr(attrs: &[Attribute]) -> bool {
+fn has_skip_clear_attr(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|attr| {
-        // Detect both #[skip_reset] and namespaced forms like #[pipeline::skip_reset]
+        // Detect both #[skip_clear] and namespaced forms like #[pipeline::skip_clear]
         attr.path()
             .segments
             .last()
-            .is_some_and(|seg| seg.ident == "skip_reset")
+            .is_some_and(|seg| seg.ident == "skip_clear")
     })
 }
 

@@ -7,4 +7,8 @@ pub enum Error {
     #[error("accessing uninitialised value")]
     UninitialisedValue,
 }
-pub use crate::value::Reset;
+
+pub trait ClearUpdated {
+    type Error;
+    fn clear_updated(&mut self) -> Result<(), Self::Error>;
+}
