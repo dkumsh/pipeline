@@ -1,6 +1,6 @@
 use pipeline::value::Vector;
 #[allow(unused_imports)]
-use pipeline_derive::{pipeline, stage};
+use pipeline::{pipeline, stage};
 use std::fs;
 
 #[derive(Debug, thiserror::Error)]

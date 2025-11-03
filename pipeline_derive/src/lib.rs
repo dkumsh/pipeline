@@ -58,6 +58,8 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
         context_name.as_ref(),
         &mod_ident,
         &constructor_args,
+        attr_args.break_ty.as_ref(),
+        attr_args.clear_updated_on_break,
     ) {
         Ok(calls) => calls,
         Err(e) => return e.to_compile_error().into(),
@@ -94,6 +96,8 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
         context_param.as_ref(),
         &output_vars,
         &error_ty,
+        attr_args.break_ty.as_ref(),
+        attr_args.clear_updated_on_break,
     );
 
     // Reconstruct the module with stages unmodified
@@ -114,6 +118,8 @@ struct PipelineArgs {
     args: Vec<Ident>,
     context_name: Option<Ident>,
     error_ty: Option<Type>,
+    break_ty: Option<Type>,
+    clear_updated_on_break: bool,
 }
 
 impl Parse for PipelineArgs {
@@ -122,6 +128,8 @@ impl Parse for PipelineArgs {
         let mut args = Vec::new();
         let mut context_name = None;
         let mut error_ty = None;
+        let mut break_ty: Option<Type> = None;
+        let mut clear_updated_on_break = false;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -143,10 +151,26 @@ impl Parse for PipelineArgs {
                 let value: LitStr = input.parse()?;
                 // Parse the error type from the provided string
                 error_ty = Some(syn::parse_str::<Type>(&value.value())?);
+            } else if key == "controlflow_break" {
+                let value: LitStr = input.parse()?;
+                break_ty = Some(syn::parse_str::<Type>(&value.value())?);
+            } else if key == "clear_updated_on_break" {
+                let value: LitStr = input.parse()?;
+                let v = value.value();
+                clear_updated_on_break = match v.as_str() {
+                    "true" | "True" | "TRUE" => true,
+                    "false" | "False" | "FALSE" => false,
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            value,
+                            "clear_updated_on_break must be 'true' or 'false'",
+                        ));
+                    }
+                };
             } else {
                 return Err(syn::Error::new_spanned(
                     key,
-                    "Expected 'name', 'args', 'context' or 'error' in pipeline attribute",
+                    "Expected 'name', 'args', 'context', 'error', 'controlflow_break', or 'clear_updated_on_break' in pipeline attribute",
                 ));
             }
             if input.peek(syn::Token![,]) {
@@ -166,6 +190,8 @@ impl Parse for PipelineArgs {
             args,
             context_name,
             error_ty,
+            break_ty,
+            clear_updated_on_break,
         })
     }
 }
@@ -283,6 +309,8 @@ fn generate_impl(
     context_param: Option<&(Ident, Type)>,
     output_vars: &HashSet<String>,
     error_ty: &Type,
+    break_ty: Option<&Type>,
+    _reset_on_break: bool,
 ) -> proc_macro2::TokenStream {
     let constructor_params: Vec<_> = constructor_args
         .iter()
@@ -313,7 +341,7 @@ fn generate_impl(
         })
         .collect::<Vec<_>>();
 
-    // Generate reset calls only for fields that are outputs (written by some stage)
+    // Generate clear calls only for fields that are outputs (written by some stage)
     let clear_updated_calls: Vec<_> = fields
         .iter()
         .filter_map(|(ident, _)| {
@@ -346,54 +374,123 @@ fn generate_impl(
         quote! { &mut self }
     };
 
-    quote! {
-        // Bring Reset into scope so the trait method is available.
-        impl #pipeline_name {
-            pub fn new(#(#constructor_params),*) -> Self {
-                Self {
-                    pipeline_vars: [#(#pipeline_vars_init),*],
-                    #(#constructor_inits),*
+    // Two different impls depending on whether break_ty is present
+    if let Some(bt) = break_ty {
+        quote! {
+
+            impl #pipeline_name {
+                pub fn new(#(#constructor_params),*) -> Self {
+                    Self {
+                        pipeline_vars: [#(#pipeline_vars_init),*],
+                        #(#constructor_inits),*
+                    }
+                }
+                /// Executes all stages in topological order, with early-exit support.
+                pub fn compute(#compute_params) -> Result<::std::ops::ControlFlow<#bt>, #error_ty> {
+                    #(#compute_calls)*
+                    self.clear_updated_all()?;
+                    Ok(::std::ops::ControlFlow::Continue(()))
+                }
+
+                /// Clear the update flags on all mutated fields.
+                pub fn clear_updated_all(&mut self) -> Result<(), #error_ty> {
+                    #(#clear_updated_calls)*
+                    Ok(())
+                }
+
+                pub fn puml_diagram() -> &'static str {
+                    #puml_literal
+                }
+
+                pub fn html_diagram() -> String {
+                    let template: &str = #html_template_lit;
+                    template
+                        .replace("{{PIPELINE_NAME}}", #pipeline_name_lit)
+                        .replace("{{NODES_JSON}}", #nodes_json_lit)
+                        .replace("{{EDGES_JSON}}", #edges_json_lit)
+                }
+
+                pub fn write_html_to_file<P: AsRef<std::path::Path>>(
+                    file_path: P,
+                ) -> std::io::Result<()> {
+                    std::fs::write(file_path, Self::html_diagram())
                 }
             }
+        }
+    } else {
+        quote! {
+            impl #pipeline_name {
+                pub fn new(#(#constructor_params),*) -> Self {
+                    Self {
+                        pipeline_vars: [#(#pipeline_vars_init),*],
+                        #(#constructor_inits),*
+                    }
+                }
 
-            /// Executes all stages in topological order, propagating any errors.
-            pub fn compute(#compute_params) -> Result<(), #error_ty> {
-                #(#compute_calls)*
-                self.clear_updated_all()?;
-                Ok(())
-            }
+                /// Executes all stages in topological order.
+                pub fn compute(#compute_params) -> Result<(), #error_ty> {
+                    #(#compute_calls)*
+                    self.clear_updated_all()?;
+                    Ok(())
+                }
 
-            /// Clear the update flags on all mutated fields.  Errors from
-            /// the `ClearUpdated` trait are propagated to the caller.
-            pub fn clear_updated_all(&mut self) -> Result<(), #error_ty> {
-                #(#clear_updated_calls)*
-                Ok(())
-            }
+                /// Clear the update flags on all mutated fields.
+                pub fn clear_updated_all(&mut self) -> Result<(), #error_ty> {
+                    #(#clear_updated_calls)*
+                    Ok(())
+                }
 
-            /// Returns the PlantUML diagram representing the pipeline stages and their dependencies.
-            pub fn puml_diagram() -> &'static str {
-                #puml_literal
-            }
+                pub fn puml_diagram() -> &'static str {
+                    #puml_literal
+                }
 
-            /// Builds the HTML content visualizing the pipeline, using a template embedded with include_str!.
-            /// Returns an owned String (not &'static str) since we perform placeholder substitution.
-            pub fn html_diagram() -> String {
-                // Use the embedded template (from derive crate) as a literal.
-                let template: &str = #html_template_lit;
-                template
-                    .replace("{{PIPELINE_NAME}}", #pipeline_name_lit)
-                    .replace("{{NODES_JSON}}", #nodes_json_lit)
-                    .replace("{{EDGES_JSON}}", #edges_json_lit)
-            }
+                pub fn html_diagram() -> String {
+                    let template: &str = #html_template_lit;
+                    template
+                        .replace("{{PIPELINE_NAME}}", #pipeline_name_lit)
+                        .replace("{{NODES_JSON}}", #nodes_json_lit)
+                        .replace("{{EDGES_JSON}}", #edges_json_lit)
+                }
 
-            /// Writes the HTML diagram to the specified file path.
-            pub fn write_html_to_file<P: AsRef<std::path::Path>>(
-                file_path: P,
-            ) -> std::io::Result<()> {
-                std::fs::write(file_path, Self::html_diagram())
+                pub fn write_html_to_file<P: AsRef<std::path::Path>>(
+                    file_path: P,
+                ) -> std::io::Result<()> {
+                    std::fs::write(file_path, Self::html_diagram())
+                }
             }
         }
     }
+}
+
+/// Returns true if the provided type is `ControlFlow<..., ...>`.
+fn is_controlflow_type(ty: &Type) -> bool {
+    if let Type::Path(type_path) = ty
+        && let Some(seg) = type_path.path.segments.last()
+    {
+        return seg.ident == "ControlFlow";
+    }
+    false
+}
+
+/// Returns true if the provided type is `Result<ControlFlow<..., ...>, E>`.
+fn is_result_of_controlflow(ty: &Type) -> bool {
+    use syn::{GenericArgument, PathArguments};
+    let Type::Path(tp) = ty else {
+        return false;
+    };
+    let Some(seg) = tp.path.segments.last() else {
+        return false;
+    };
+    if seg.ident != "Result" {
+        return false;
+    }
+    let PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return false;
+    };
+    if let Some(GenericArgument::Type(ok_ty)) = args.args.first() {
+        return is_controlflow_type(ok_ty);
+    }
+    false
 }
 
 fn generate_compute_calls(
@@ -401,6 +498,8 @@ fn generate_compute_calls(
     context_name: Option<&Ident>,
     mod_ident: &Ident,
     constructor_args: &[Ident],
+    break_ty: Option<&Type>,
+    clear_updated_on_break: bool,
 ) -> syn::Result<Vec<proc_macro2::TokenStream>> {
     // Maps pipeline field -> stage that writes it
     let mut var_writers: HashMap<String, Ident> = HashMap::new();
@@ -583,17 +682,63 @@ fn generate_compute_calls(
             })
             .collect::<Vec<_>>();
 
-        // Determine whether the stage returns a Result.  If so, use `?` to propagate errors; otherwise just call it.
-        let returns_result = matches!(
-            &stage.sig.output,
-            syn::ReturnType::Type(_, ty) if is_result_type(ty)
-        );
-
-        let call = if returns_result {
-            quote! { #mod_ident::#stage_name(#(#args),*)?; }
-        } else {
-            quote! { #mod_ident::#stage_name(#(#args),*); }
+        // Build call based on return type, with optional ControlFlow handling.
+        let call = match &stage.sig.output {
+            syn::ReturnType::Default => {
+                quote! { #mod_ident::#stage_name(#(#args),*); }
+            }
+            syn::ReturnType::Type(_, ty) => {
+                if is_result_of_controlflow(ty) {
+                    // Ensure break_ty is present
+                    if break_ty.is_none() {
+                        return Err(syn::Error::new(
+                            ty.span(),
+                            "stage returns ControlFlow but pipeline has no `controlflow_break=\"...\"` type declared",
+                        ));
+                    }
+                    let break_cleanup = if clear_updated_on_break {
+                        quote! { self.clear_updated_all()?; }
+                    } else {
+                        quote! {}
+                    };
+                    quote! {
+                        match #mod_ident::#stage_name(#(#args),*)? {
+                            ::std::ops::ControlFlow::Continue(()) => {},
+                            ::std::ops::ControlFlow::Break(b) => {
+                                #break_cleanup
+                                return Ok(::std::ops::ControlFlow::Break(b));
+                            }
+                        }
+                    }
+                } else if is_controlflow_type(ty) {
+                    if break_ty.is_none() {
+                        return Err(syn::Error::new(
+                            ty.span(),
+                            "stage returns ControlFlow but pipeline has no `controlflow_break=\"...\"` type declared",
+                        ));
+                    }
+                    let break_cleanup = if clear_updated_on_break {
+                        quote! { self.clear_updated_all()?; }
+                    } else {
+                        quote! {}
+                    };
+                    quote! {
+                        match #mod_ident::#stage_name(#(#args),*) {
+                            ::std::ops::ControlFlow::Continue(()) => {},
+                            ::std::ops::ControlFlow::Break(b) => {
+                                #break_cleanup
+                                return Ok(::std::ops::ControlFlow::Break(b));
+                            }
+                        }
+                    }
+                } else if is_result_type(ty) {
+                    quote! { #mod_ident::#stage_name(#(#args),*)?; }
+                } else {
+                    quote! { #mod_ident::#stage_name(#(#args),*); }
+                }
+            }
         };
+
         compute_calls.push(call);
     }
 
