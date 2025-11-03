@@ -1,5 +1,5 @@
-use pipeline::pipeline;
 use pipeline::value::Vector;
+use pipeline::{pipeline, stage};
 use std::fs;
 
 #[derive(Debug, thiserror::Error)]
@@ -20,10 +20,7 @@ pub enum AppError {
     error = "AppError"
 )]
 pub mod calculator {
-    use super::AppError;
-    use crate::{Config, Context, Mid, TopOfBook};
-    use pipeline::stage;
-    use pipeline::value::Vector;
+    use super::*;
 
     #[stage]
     pub fn print_mid(config: &Config, mid: &Vector<Mid>) -> Result<(), AppError> {

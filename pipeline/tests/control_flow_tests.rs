@@ -1,5 +1,5 @@
 //! ControlFlow integration tests for the #[pipeline] macro.
-use pipeline::pipeline;
+use pipeline::{pipeline, stage};
 use std::ops::ControlFlow;
 
 /// A tiny helper we can mutate and then detect whether `clear_updated_all()`
@@ -42,9 +42,7 @@ enum AppError {
     clear_updated_on_break = "true"
 )]
 mod m1 {
-    use super::{AppError, Flag, MyBreak};
-    use pipeline::stage;
-    use std::ops::ControlFlow::{self, Break, Continue};
+    use super::*;
 
     // This stage increments and requests an early Break when limit is hit.
     // Note the Result<ControlFlow<..>> ok-type—this exercises that branch.
@@ -55,9 +53,9 @@ mod m1 {
     ) -> Result<ControlFlow<MyBreak, ()>, AppError> {
         counter.ticks += 1;
         if counter.ticks >= *limit {
-            return Ok(Break(MyBreak::ConvergedAt(counter.ticks)));
+            return Ok(ControlFlow::Break(MyBreak::ConvergedAt(counter.ticks)));
         }
-        Ok(Continue(()))
+        Ok(ControlFlow::Continue(()))
     }
 }
 
@@ -94,9 +92,7 @@ fn controlflow_break_returns_break_and_clears_when_reset_on_break_true() -> Resu
     clear_updated_on_break = "true"   // …but stage never returns Break
 )]
 mod m2 {
-    use super::{AppError, Flag, MyBreak};
-    use pipeline::stage;
-    use std::ops::ControlFlow::{self, Continue};
+    use super::*;
 
     #[stage]
     pub fn step(
@@ -105,11 +101,11 @@ mod m2 {
     ) -> Result<ControlFlow<MyBreak, ()>, AppError> {
         if counter.ticks + 1 < *limit {
             counter.ticks += 1;
-            return Ok(Continue(()));
+            return Ok(ControlFlow::Continue(()));
         }
         // One last tick then stop continuing; still not a Break.
         counter.ticks = *limit;
-        Ok(Continue(()))
+        Ok(ControlFlow::Continue(()))
     }
 }
 
@@ -146,18 +142,16 @@ fn controlflow_continue_completes_and_clears_at_end() -> Result<(), AppError> {
     clear_updated_on_break = "false"
 )]
 mod m3 {
-    use super::{AppError, Flag, MyBreak};
-    use pipeline::stage;
-    use std::ops::ControlFlow::{self, Break, Continue};
+    use super::*;
 
     #[stage]
     pub fn step(#[unused] counter: &mut Flag) -> Result<ControlFlow<MyBreak, ()>, AppError> {
         counter.ticks += 1;
         if counter.ticks == 1 {
             // Break immediately.
-            return Ok(Break(MyBreak::ConvergedAt(1)));
+            return Ok(ControlFlow::Break(MyBreak::ConvergedAt(1)));
         }
-        Ok(Continue(()))
+        Ok(ControlFlow::Continue(()))
     }
 }
 
@@ -183,8 +177,7 @@ fn controlflow_break_does_not_clear_when_reset_on_break_false() -> Result<(), Ap
 
 #[pipeline(name = "PlainPipe", error = "AppError")]
 mod m4 {
-    use super::{AppError, Flag};
-    use pipeline::stage;
+    use super::*;
 
     // No ControlFlow here; classic Result<(), _> stage.
     #[stage]

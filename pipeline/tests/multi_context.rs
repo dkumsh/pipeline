@@ -44,7 +44,6 @@ fn pipeline_with_two_contexts_runs() {
 #[pipeline(name = "UnderscoreCtxPipeline", context = "db, cache")]
 mod underscore_ctx {
     use super::*;
-    use pipeline::stage;
 
     #[stage]
     pub fn increment(_db: &mut DbCtx) {

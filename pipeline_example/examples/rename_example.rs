@@ -1,5 +1,5 @@
-use pipeline::pipeline;
 use pipeline::value::Vector;
+use pipeline::{pipeline, stage};
 use thiserror::Error;
 
 /// Custom error type that converts pipeline::Error via `From`
@@ -13,8 +13,7 @@ pub enum AppError {
 #[allow(unused_variables)]
 #[allow(clippy::disallowed_names)]
 pub mod example {
-    use super::{AppError, Config, Foo};
-    use pipeline::{stage, value::Vector};
+    use super::*;
 
     #[stage]
     // The parameter is named `my_foo` in this function,
