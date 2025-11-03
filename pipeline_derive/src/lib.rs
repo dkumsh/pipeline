@@ -23,39 +23,29 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
     let pipeline_name = attr_args.name;
     let pipeline_name_str = quote! {#pipeline_name}.to_string();
     let constructor_args = attr_args.args;
-    let context_name = attr_args.context_name;
+    let context_names = &attr_args.context_names;
 
     // Extract public functions annotated with #[stage]
     let stages = extract_stages(&mut module);
 
-    // Infer the context type from the stages
-    let context_param = if let Some(context_name) = &context_name {
-        match infer_context_type(&stages, context_name) {
-            Some(ty) => Some((context_name.clone(), ty)),
-            None => {
-                return syn::Error::new_spanned(
-                    context_name,
-                    format!(
-                        "Context parameter '{}' not found in any stage functions",
-                        context_name
-                    ),
-                )
-                .to_compile_error()
-                .into();
-            }
+    // Infer the context types from the stages.  Multiple context names are supported.
+    let context_params: Vec<(Ident, Type)> = if !attr_args.context_names.is_empty() {
+        match infer_context_types(&stages, &attr_args.context_names) {
+            Ok(v) => v,
+            Err(e) => return e.to_compile_error().into(),
         }
     } else {
-        None
+        Vec::new()
     };
 
-    // Collect unique parameters from all stages, excluding the context parameter
-    let (fields, field_names, pipeline_vars) = collect_fields(&stages, context_name.as_ref());
+    // Collect unique parameters from all stages, excluding any context parameters
+    let (fields, field_names, pipeline_vars) = collect_fields(&stages, &attr_args.context_names);
 
     // Perform Dependency Analysis and Topological Sort
     // Pass constructor_args into generate_compute_calls so it can detect missing inputs.
     let compute_calls = match generate_compute_calls(
         &stages,
-        context_name.as_ref(),
+        context_names,
         &mod_ident,
         &constructor_args,
         attr_args.break_ty.as_ref(),
@@ -66,7 +56,7 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     // Collect the names of variables written by any stage.  Only these need resetting.
-    let output_vars = collect_outputs(&stages, context_name.as_ref());
+    let output_vars = collect_outputs(&stages, context_names);
 
     // Determine error type: user-specified or default to pipeline::Error
     let error_ty = attr_args.error_ty.clone().unwrap_or_else(|| {
@@ -74,10 +64,10 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
     });
 
     // Generate the PUML Diagram Content
-    let puml_content = generate_puml(&stages, context_name.as_ref());
+    let puml_content = generate_puml(&stages, context_names);
 
     // Generate the JSON for HTML diagram (nodes/edges only)
-    let (nodes_json, edges_json) = generate_html_data(&stages, context_name.as_ref());
+    let (nodes_json, edges_json) = generate_html_data(&stages, context_names);
 
     // Generate the struct (context is not included)
     let struct_def = generate_struct(&pipeline_name, &fields, &pipeline_vars);
@@ -93,7 +83,7 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
         &pipeline_name_str,
         &nodes_json,
         &edges_json,
-        context_param.as_ref(),
+        &context_params,
         &output_vars,
         &error_ty,
         attr_args.break_ty.as_ref(),
@@ -112,11 +102,17 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
     output.into()
 }
 
-// Custom parser for attribute arguments
+/// Parsed arguments for the `#[pipeline]` attribute.  The `context_names` field
+/// stores zero or more names for context parameters (e.g. `context = "db, metrics"`).
 struct PipelineArgs {
+    /// Name of the pipeline container type
     name: Ident,
+    /// Names of the pipeline constructor arguments, parameters provided via the `new`.
+    /// They are passed to stages as parameters.
     args: Vec<Ident>,
-    context_name: Option<Ident>,
+    /// Names of the context parameters provided via the `context` attribute.  The
+    /// pipeline macro will infer the type for each name separately.
+    context_names: Vec<Ident>,
     error_ty: Option<Type>,
     break_ty: Option<Type>,
     clear_updated_on_break: bool,
@@ -126,7 +122,7 @@ impl Parse for PipelineArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut name = None;
         let mut args = Vec::new();
-        let mut context_name = None;
+        let mut context_names: Vec<Ident> = Vec::new();
         let mut error_ty = None;
         let mut break_ty: Option<Type> = None;
         let mut clear_updated_on_break = false;
@@ -146,7 +142,11 @@ impl Parse for PipelineArgs {
                     .collect();
             } else if key == "context" {
                 let value: LitStr = input.parse()?;
-                context_name = Some(format_ident!("{}", value.value()));
+                context_names = value
+                    .value()
+                    .split(',')
+                    .map(|p| format_ident!("{}", p.trim()))
+                    .collect();
             } else if key == "error" {
                 let value: LitStr = input.parse()?;
                 // Parse the error type from the provided string
@@ -188,7 +188,7 @@ impl Parse for PipelineArgs {
         Ok(PipelineArgs {
             name,
             args,
-            context_name,
+            context_names,
             error_ty,
             break_ty,
             clear_updated_on_break,
@@ -217,25 +217,157 @@ use std::collections::{HashMap, HashSet};
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 
-fn infer_context_type(stages: &[ItemFn], context_name: &Ident) -> Option<Type> {
+/// Infers the types of multiple context parameters for a `#[pipeline]`.
+///
+/// Given all stage functions (`stages`) and the list of declared context names
+/// from `context = "..."` (`context_names`), this:
+///
+/// - **Normalizes** parameter idents before matching to the context list
+///   (so `_db` matches `db`) using `normalized_target_ident`.
+/// - **Compares underlying element types** across all stages (i.e., it ignores
+///   whether a parameter is `&T` or `&mut T`) to ensure consistency.
+/// - **Escalates mutability**: if any stage takes a given context as `&mut T`,
+///   the generated `compute` signature will use `&mut T` for that context;
+///   otherwise it uses `&T`.
+/// - On success, returns a vector of `(Ident, Type)` where `Type` is exactly the
+///   reference type to appear in the `compute` signature (`&T` or `&mut T`).
+/// - On failure, returns a **precise diagnostic** listing:
+///     * any **missing** contexts (declared but not referenced by any stage), and
+///     * any **type conflicts** where the **underlying** types differ across stages.
+///
+/// ### Notes
+/// - “Underlying type” means: for a parameter typed `&T` or `&mut T`, we compare `T`.
+/// - Mutability differences themselves are OK (handled via escalation); **type**
+///   differences in `T` are not.
+///
+/// Returns:
+/// - `Ok(Vec<(Ident, Type)>)` on success,
+/// - `Err(syn::Error)` with a detailed message on missing/conflicting contexts.
+fn infer_context_types(
+    stages: &[ItemFn],
+    context_names: &[Ident],
+) -> syn::Result<Vec<(Ident, Type)>> {
+    use std::collections::{BTreeMap, BTreeSet};
+    use syn::{FnArg, PatType, TypeReference};
+
+    // Per-context accumulator
+    struct Seen {
+        underlying_types: BTreeSet<String>, // pretty-printed underlying types we've seen
+        representative_underlying: Option<Type>,
+        needs_mut: bool,
+    }
+
+    let mut per_ctx: BTreeMap<String, Seen> = BTreeMap::new();
+    for ctx in context_names {
+        per_ctx.insert(
+            ctx.to_string(),
+            Seen {
+                underlying_types: BTreeSet::new(),
+                representative_underlying: None,
+                needs_mut: false,
+            },
+        );
+    }
+
+    // Walk stages and collect type info for each context
     for stage in stages {
         for input in &stage.sig.inputs {
             if let FnArg::Typed(PatType {
-                attrs: _, pat, ty, ..
+                attrs,
+                pat,
+                ty: pty,
+                ..
             }) = input
                 && let syn::Pat::Ident(pat_ident) = &**pat
-                && &pat_ident.ident == context_name
             {
-                return Some((**ty).clone());
+                let target = normalized_target_ident(attrs, &pat_ident.ident);
+                let key = target.to_string();
+                if let Some(seen) = per_ctx.get_mut(&key) {
+                    let (under_ty, is_mut) = match pty.as_ref() {
+                        Type::Reference(TypeReference {
+                            elem, mutability, ..
+                        }) => ((**elem).clone(), mutability.is_some()),
+                        other => (other.clone(), false),
+                    };
+
+                    // Canonicalize the pretty-printed type to reduce false mismatches due to whitespace.
+                    let ty_str = quote!(#under_ty)
+                        .to_string()
+                        .replace(char::is_whitespace, "");
+                    seen.underlying_types.insert(ty_str);
+
+                    if seen.representative_underlying.is_none() {
+                        seen.representative_underlying = Some(under_ty);
+                    }
+                    if is_mut {
+                        seen.needs_mut = true;
+                    }
+                }
             }
         }
     }
-    None
+
+    // Build result or a precise error
+    let mut missing: Vec<String> = Vec::new();
+    let mut conflicts: Vec<(String, Vec<String>)> = Vec::new();
+
+    for (ctx_name, seen) in &per_ctx {
+        if seen.representative_underlying.is_none() {
+            missing.push(ctx_name.clone());
+            continue;
+        }
+        if seen.underlying_types.len() > 1 {
+            conflicts.push((
+                ctx_name.clone(),
+                seen.underlying_types.iter().cloned().collect(),
+            ));
+        }
+    }
+
+    if !missing.is_empty() || !conflicts.is_empty() {
+        let mut msg = String::new();
+        if !missing.is_empty() {
+            msg.push_str("Missing context parameters (not referenced by any stage): ");
+            msg.push_str(&missing.join(", "));
+            msg.push('\n');
+        }
+        if !conflicts.is_empty() {
+            msg.push_str("Context type inconsistencies detected:\n");
+            for (name, tys) in conflicts {
+                msg.push_str(&format!(
+                    "  - {name}: seen underlying types [{}]\n",
+                    tys.join(", ")
+                ));
+            }
+            msg.push_str(
+                "Underlying types must match across all stages (mutability may differ).\n",
+            );
+        }
+        return Err(syn::Error::new(proc_macro2::Span::call_site(), msg));
+    }
+
+    // Everything consistent: produce the final (& or &mut) context parameter list
+    let mut out = Vec::new();
+    for ctx in context_names {
+        let seen = per_ctx.get(&ctx.to_string()).expect("ctx tracked");
+        let under = seen
+            .representative_underlying
+            .as_ref()
+            .expect("validated above");
+        let built_ty: Type = if seen.needs_mut {
+            syn::parse_quote! { &mut #under }
+        } else {
+            syn::parse_quote! { & #under }
+        };
+        out.push((ctx.clone(), built_ty));
+    }
+
+    Ok(out)
 }
 
 fn collect_fields(
     stages: &[ItemFn],
-    context_name: Option<&Ident>,
+    context_names: &[Ident],
 ) -> (Vec<(Ident, Type)>, Vec<Ident>, Vec<String>) {
     let mut fields_map = HashMap::new();
 
@@ -244,8 +376,9 @@ fn collect_fields(
             if let FnArg::Typed(PatType { attrs, pat, ty, .. }) = input
                 && let syn::Pat::Ident(pat_ident) = &**pat
             {
-                // Skip context parameter
-                if Some(&pat_ident.ident) == context_name {
+                let target = normalized_target_ident(attrs, &pat_ident.ident);
+                // Skip any context parameters
+                if context_names.contains(&target) {
                     continue;
                 }
 
@@ -306,7 +439,7 @@ fn generate_impl(
     pipeline_name_str: &str, // for HTML template
     nodes_json: &str,
     edges_json: &str,
-    context_param: Option<&(Ident, Type)>,
+    context_params: &[(Ident, Type)],
     output_vars: &HashSet<String>,
     error_ty: &Type,
     break_ty: Option<&Type>,
@@ -367,9 +500,13 @@ fn generate_impl(
     let edges_json_lit = LitStr::new(edges_json, proc_macro2::Span::call_site());
     let pipeline_name_lit = LitStr::new(pipeline_name_str, proc_macro2::Span::call_site());
 
-    // Prepare compute method signature
-    let compute_params = if let Some((context_name, context_type)) = context_param {
-        quote! { &mut self, #context_name: #context_type }
+    // Prepare compute method signature.  Multiple context parameters are supported.
+    let compute_params = if !context_params.is_empty() {
+        let params: Vec<_> = context_params
+            .iter()
+            .map(|(context_name, context_type)| quote! { #context_name: #context_type })
+            .collect();
+        quote! { &mut self, #(#params),* }
     } else {
         quote! { &mut self }
     };
@@ -495,7 +632,7 @@ fn is_result_of_controlflow(ty: &Type) -> bool {
 
 fn generate_compute_calls(
     stages: &[ItemFn],
-    context_name: Option<&Ident>,
+    context_names: &[Ident],
     mod_ident: &Ident,
     constructor_args: &[Ident],
     break_ty: Option<&Type>,
@@ -520,10 +657,12 @@ fn generate_compute_calls(
             if let FnArg::Typed(PatType { attrs, pat, ty, .. }) = input
                 && let syn::Pat::Ident(pat_ident) = &**pat
             {
-                // Skip context parameter
-                if Some(&pat_ident.ident) == context_name {
+                let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
+                // Skip any context parameter
+                if context_names.contains(&target_ident) {
                     continue;
                 }
+
                 // Determine pipeline field name for this parameter
                 let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
                 let var_name = target_ident.to_string();
@@ -586,7 +725,10 @@ fn generate_compute_calls(
         let is_arg = constructor_args
             .iter()
             .any(|arg| arg == &format_ident!("{}", read_var));
-        let is_ctx = context_name.is_some_and(|c| c == &format_ident!("{}", read_var));
+        // With multiple context parameters, test membership in the list
+        let is_ctx = context_names
+            .iter()
+            .any(|c| c == &format_ident!("{}", read_var));
         if !var_writers.contains_key(read_var) && !is_arg && !is_ctx {
             return Err(syn::Error::new(
                 *span,
@@ -659,10 +801,10 @@ fn generate_compute_calls(
                             Type::Reference(syn::TypeReference { mutability, .. })
                                 if mutability.is_some()
                         );
-
+                        let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
                         // Context param is passed through as-is
-                        if Some(&pat_ident.ident) == context_name {
-                            return quote! { #pat_ident };
+                        if context_names.contains(&target_ident) {
+                            return quote! { #target_ident };
                         }
 
                         // Use pipeline field name
@@ -758,7 +900,7 @@ fn is_result_type(ty: &Type) -> bool {
 /// Collects the names of variables that are written (i.e. passed as `&mut`) in any stage.
 fn collect_outputs(
     stages: &[ItemFn],
-    context_name: Option<&Ident>,
+    context_names: &[Ident],
 ) -> std::collections::HashSet<String> {
     use std::collections::HashSet;
     let mut outputs = HashSet::new();
@@ -767,7 +909,9 @@ fn collect_outputs(
             if let FnArg::Typed(PatType { attrs, pat, ty, .. }) = input
                 && let syn::Pat::Ident(pat_ident) = &**pat
             {
-                if Some(&pat_ident.ident) == context_name {
+                let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
+                // Skip context parameters
+                if context_names.iter().any(|name| name == &target_ident) {
                     continue;
                 }
                 if let Type::Reference(type_ref) = &**ty
@@ -842,7 +986,7 @@ fn topological_sort(
     Ok(result)
 }
 
-fn generate_puml(stages: &[ItemFn], context_name: Option<&Ident>) -> String {
+fn generate_puml(stages: &[ItemFn], context_names: &[Ident]) -> String {
     use std::collections::HashSet;
 
     let mut puml = String::new();
@@ -875,7 +1019,9 @@ fn generate_puml(stages: &[ItemFn], context_name: Option<&Ident>) -> String {
             if let FnArg::Typed(PatType { attrs, pat, ty, .. }) = input
                 && let syn::Pat::Ident(pat_ident) = &**pat
             {
-                if Some(&pat_ident.ident) == context_name {
+                let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
+                // Skip context parameters
+                if context_names.iter().any(|name| name == &target_ident) {
                     continue;
                 }
                 let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
@@ -900,7 +1046,7 @@ fn generate_puml(stages: &[ItemFn], context_name: Option<&Ident>) -> String {
     puml
 }
 
-fn generate_html_data(stages: &[ItemFn], context_name: Option<&Ident>) -> (String, String) {
+fn generate_html_data(stages: &[ItemFn], context_names: &[Ident]) -> (String, String) {
     use serde_json::json;
     use std::collections::HashSet;
 
@@ -922,7 +1068,9 @@ fn generate_html_data(stages: &[ItemFn], context_name: Option<&Ident>) -> (Strin
             if let FnArg::Typed(PatType { attrs, pat, ty, .. }) = input
                 && let syn::Pat::Ident(pat_ident) = &**pat
             {
-                if Some(&pat_ident.ident) == context_name {
+                let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
+                // Skip context parameters
+                if context_names.iter().any(|name| name == &target_ident) {
                     continue;
                 }
                 let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
