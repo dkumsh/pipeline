@@ -1,10 +1,19 @@
 [package]
-name = "pipeline"
+name = "pipeline-dsl"
 version.workspace = true
-edition .workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+description = "Pipeline DSL types and re-exports of #[pipeline]/#[stage]."
+repository.workspace = true
+keywords.workspace = true
 
 [dependencies]
 chrono = { workspace = true }
 thiserror = { workspace = true }
 bitvec = { workspace = true }
-pipeline_derive = { path = "../pipeline_derive" }
+pipeline-dsl-macros = { path = "../pipeline_derive", version="0.0.1"}
+
+[lib]
+name = "pipeline"
+crate-type = ["rlib"]

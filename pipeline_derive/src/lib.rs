@@ -1,11 +1,13 @@
 extern crate proc_macro;
 use proc_macro::TokenStream;
+use proc_macro_crate::{FoundCrate, crate_name};
 use quote::{format_ident, quote};
+
 use syn::{
     Attribute, Expr, ExprLit, FnArg, Ident, ItemFn, ItemMod, Lit, LitStr, Meta, MetaNameValue,
     PatType, Type,
     parse::{Parse, ParseStream},
-    parse_macro_input,
+    parse_macro_input, parse_quote,
 };
 // Compile the template into the derive crate binary:
 const HTML_TEMPLATE: &str = include_str!(concat!(
@@ -15,6 +17,10 @@ const HTML_TEMPLATE: &str = include_str!(concat!(
 
 #[proc_macro_attribute]
 pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let main_crate_ident = match crate_name("pipeline") {
+        Ok(FoundCrate::Itself) => format_ident!("crate"), // when expanding inside pipeline-dsl itself
+        _ => format_ident!("pipeline"),                   // everywhere else (tests, external users)
+    };
     // Parse the attribute arguments and the module item
     let attr_args = parse_macro_input!(attr as PipelineArgs);
     let mut module = parse_macro_input!(item as ItemMod);
@@ -59,9 +65,10 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
     let output_vars = collect_outputs(&stages, context_names);
 
     // Determine error type: user-specified or default to pipeline::Error
-    let error_ty = attr_args.error_ty.clone().unwrap_or_else(|| {
-        syn::parse_str::<Type>("pipeline::Error").expect("Failed to parse default error type")
-    });
+    let error_ty = attr_args
+        .error_ty
+        .clone()
+        .unwrap_or_else(|| parse_quote!(#main_crate_ident::Error));
 
     // Generate the PUML Diagram Content
     let puml_content = generate_puml(&stages, context_names);
@@ -87,7 +94,7 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
         &output_vars,
         &error_ty,
         attr_args.break_ty.as_ref(),
-        attr_args.clear_updated_on_break,
+        &main_crate_ident,
     );
 
     // Reconstruct the module with stages unmodified
@@ -443,7 +450,7 @@ fn generate_impl(
     output_vars: &HashSet<String>,
     error_ty: &Type,
     break_ty: Option<&Type>,
-    _reset_on_break: bool,
+    main_crate_ident: &Ident,
 ) -> proc_macro2::TokenStream {
     let constructor_params: Vec<_> = constructor_args
         .iter()
@@ -481,7 +488,7 @@ fn generate_impl(
             let name = ident.to_string();
             if output_vars.contains(&name) {
                 Some(quote! {
-                    ::pipeline::ClearUpdated::clear_updated(&mut self.#ident)
+                    #main_crate_ident::Reset::clear_updated(&mut self.#ident)
                         .map_err(|e| -> #error_ty { e.into() })?;
                 })
             } else {
@@ -917,7 +924,7 @@ fn collect_outputs(
                 if let Type::Reference(type_ref) = &**ty
                     && type_ref.mutability.is_some()
                 {
-                    // skip resettable fields marked #[skip_clear]
+                    // skip resettable fields marked #[skip_reset]
                     if has_skip_clear_attr(attrs) {
                         continue;
                     }
@@ -1111,7 +1118,7 @@ pub fn stage(_attr: TokenStream, item: TokenStream) -> TokenStream {
             pat_type.attrs.retain(|attr| {
                 let last = attr.path().segments.last().map(|s| &s.ident);
                 last != Some(&Ident::new("rename", Span::call_site()))
-                    && last != Some(&Ident::new("skip_clear", Span::call_site()))
+                    && last != Some(&Ident::new("skip_reset", Span::call_site()))
                     && last != Some(&Ident::new("unused", Span::call_site()))
             });
         }
@@ -1128,11 +1135,11 @@ fn is_stage_attr(attr: &syn::Attribute) -> bool {
 
 fn has_skip_clear_attr(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|attr| {
-        // Detect both #[skip_clear] and namespaced forms like #[pipeline::skip_clear]
+        // Detect both #[skip_reset] and namespaced forms like #[pipeline::skip_reset]
         attr.path()
             .segments
             .last()
-            .is_some_and(|seg| seg.ident == "skip_clear")
+            .is_some_and(|seg| seg.ident == "skip_reset")
     })
 }
 

@@ -1,4 +1,4 @@
-pub use pipeline_derive::{pipeline, stage};
+pub use pipeline_dsl_macros::{pipeline, stage};
 
 pub mod value;
 use thiserror::Error;
@@ -8,7 +8,7 @@ pub enum Error {
     UninitialisedValue,
 }
 
-pub trait ClearUpdated {
+pub trait Reset {
     type Error;
     fn clear_updated(&mut self) -> Result<(), Self::Error>;
 }

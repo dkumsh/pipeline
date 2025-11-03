@@ -1,4 +1,4 @@
-# pipeline — Procedural macro for graph-shaped computation in plain Rust
+# pipeline — Procedural macro for graph-shaped computation.
 
 > **Functions + names ⇒ DAG ⇒ deterministic compute**  
 > Write ordinary functions, let the macro derive the dependency graph, and get a topologically sorted `compute()` with crisp diagnostics.
@@ -279,4 +279,4 @@ Yes. List them in `context = "…"`; normalization and type-checking apply per c
 
 ## License
 
-MIT
+MIT OR Apache-2.0

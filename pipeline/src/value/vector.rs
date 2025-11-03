@@ -1,5 +1,5 @@
-use crate::ClearUpdated;
 use crate::Error;
+use crate::Reset;
 use bitvec::prelude::*;
 use std::vec::Vec;
 
@@ -183,7 +183,7 @@ impl<V> Vector<V> {
     }
 }
 
-impl<V> ClearUpdated for Vector<V> {
+impl<V> Reset for Vector<V> {
     type Error = Error;
     fn clear_updated(&mut self) -> Result<(), Error> {
         self.update_flags.clear();

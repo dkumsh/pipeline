@@ -8,13 +8,13 @@ use std::ops::ControlFlow;
 struct Flag {
     // Anything you mutate makes it an output in the pipeline graph.
     ticks: u32,
-    // We flip this inside `ClearUpdated::clear_updated`.
+    // We flip this inside `Reset::clear_updated`.
     cleared: bool,
 }
 
 // Implement the pipeline crate’s clearing trait so the macro-generated code
-// can call `ClearUpdated::clear_updated(&mut Flag)`.
-impl pipeline::ClearUpdated for Flag {
+// can call `Reset::clear_updated(&mut Flag)`.
+impl pipeline::Reset for Flag {
     type Error = pipeline::Error;
     fn clear_updated(&mut self) -> Result<(), Self::Error> {
         self.cleared = true;
@@ -43,11 +43,12 @@ enum AppError {
 )]
 mod m1 {
     use super::{AppError, Flag, MyBreak};
+    use pipeline::stage;
     use std::ops::ControlFlow::{self, Break, Continue};
 
     // This stage increments and requests an early Break when limit is hit.
     // Note the Result<ControlFlow<..>> ok-type—this exercises that branch.
-    #[pipeline::stage]
+    #[stage]
     pub fn step(
         #[unused] counter: &mut Flag,
         #[unused] limit: &u32,
@@ -94,9 +95,10 @@ fn controlflow_break_returns_break_and_clears_when_reset_on_break_true() -> Resu
 )]
 mod m2 {
     use super::{AppError, Flag, MyBreak};
+    use pipeline::stage;
     use std::ops::ControlFlow::{self, Continue};
 
-    #[pipeline::stage]
+    #[stage]
     pub fn step(
         #[unused] counter: &mut Flag,
         #[unused] limit: &u32,
@@ -145,9 +147,10 @@ fn controlflow_continue_completes_and_clears_at_end() -> Result<(), AppError> {
 )]
 mod m3 {
     use super::{AppError, Flag, MyBreak};
+    use pipeline::stage;
     use std::ops::ControlFlow::{self, Break, Continue};
 
-    #[pipeline::stage]
+    #[stage]
     pub fn step(#[unused] counter: &mut Flag) -> Result<ControlFlow<MyBreak, ()>, AppError> {
         counter.ticks += 1;
         if counter.ticks == 1 {
@@ -181,9 +184,10 @@ fn controlflow_break_does_not_clear_when_reset_on_break_false() -> Result<(), Ap
 #[pipeline(name = "PlainPipe", error = "AppError")]
 mod m4 {
     use super::{AppError, Flag};
+    use pipeline::stage;
 
     // No ControlFlow here; classic Result<(), _> stage.
-    #[pipeline::stage]
+    #[stage]
     pub fn step(#[unused] counter: &mut Flag) -> Result<(), AppError> {
         counter.ticks += 1;
         Ok(())

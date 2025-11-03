@@ -14,8 +14,7 @@ pub enum AppError {
 #[allow(clippy::disallowed_names)]
 pub mod example {
     use super::{AppError, Config, Foo};
-    use pipeline::value::Vector;
-    use pipeline_derive::stage;
+    use pipeline::{stage, value::Vector};
 
     #[stage]
     // The parameter is named `my_foo` in this function,

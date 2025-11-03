@@ -1,10 +1,12 @@
 [workspace.package]
 authors = ["Dmitriy Kumshayev <dq@mail.coom>"]
-license = "private"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dkumsh/pipeline"
+readme = "README.md"
+keywords = ["pipeline", "dataflow", "dag", "macro", "workflow"]
 description = "Compile‑time pipeline DSL for structuring computations"
 edition = "2024"
-keywords = ["pipeline"]
-version = "0.0.0"
+version = "0.0.1"
 
 [workspace]
 resolver = "2"
@@ -18,3 +20,7 @@ quote = "1.0"
 proc-macro2 = "1.0"
 thiserror = "2.0"
 bitvec = "1.0.1"
+
+[patch.crates-io]
+pipeline-dsl = { path = "pipeline" }
+pipeline-dsl-macros = { path = "pipeline_derive" }

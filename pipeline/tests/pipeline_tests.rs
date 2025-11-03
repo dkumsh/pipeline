@@ -40,13 +40,14 @@ impl From<pipeline::Error> for TestErr {
 #[pipeline(name = "RenamePipeline", error = "TestErr")]
 mod rename_mod {
     use super::TestErr;
+    use pipeline::stage;
     // no explicit imports needed in this module; macros are resolved via `pipeline` re-export
 
     // Stage initialising the renamed field.
-    #[pipeline::stage]
+    #[stage]
     pub fn init(
         #[rename = "my_field"]
-        #[skip_clear]
+        #[skip_reset]
         val: &mut u32,
     ) -> Result<(), TestErr> {
         *val = 42;
@@ -55,7 +56,7 @@ mod rename_mod {
 
     // Stage reading the renamed field.  We don’t perform any assertion inside
     // the stage; the test will verify the value after compute() returns.
-    #[pipeline::stage]
+    #[stage]
     pub fn read(my_field: &u32) -> Result<(), TestErr> {
         let _ = *my_field;
         Ok(())
@@ -80,27 +81,28 @@ fn test_rename_attribute() {
 #[pipeline(name = "OrderPipeline", error = "TestErr")]
 mod order_mod {
     use super::{CALLS, TestErr};
+    use pipeline::stage;
     // no explicit imports needed in this module; macros are resolved via `pipeline` re-export
 
-    #[pipeline::stage]
-    pub fn first(#[skip_clear] x: &mut u32) -> Result<(), TestErr> {
+    #[stage]
+    pub fn first(#[skip_reset] x: &mut u32) -> Result<(), TestErr> {
         CALLS.with(|c| c.borrow_mut().push("first"));
         *x = 1;
         Ok(())
     }
 
-    #[pipeline::stage]
-    pub fn second(x: &u32, #[skip_clear] y: &mut u32) -> Result<(), TestErr> {
+    #[stage]
+    pub fn second(x: &u32, #[skip_reset] y: &mut u32) -> Result<(), TestErr> {
         CALLS.with(|c| c.borrow_mut().push("second"));
         *y = *x * 2;
         Ok(())
     }
 
-    #[pipeline::stage]
+    #[stage]
     pub fn third(
         y: &u32,
         #[unused]
-        #[skip_clear]
+        #[skip_reset]
         z: &mut u32,
     ) -> Result<(), TestErr> {
         CALLS.with(|c| c.borrow_mut().push("third"));
@@ -132,15 +134,16 @@ fn test_order_and_values() {
 #[pipeline(name = "ContextPipeline", context = "ctx", error = "TestErr")]
 mod ctx_mod {
     use super::TestErr;
+    use pipeline::stage;
     // no explicit imports needed in this module; macros are resolved via `pipeline` re-export
 
-    #[pipeline::stage]
+    #[stage]
     pub fn stage1(ctx: &mut String) -> Result<(), TestErr> {
         ctx.push_str("stage1");
         Ok(())
     }
 
-    #[pipeline::stage]
+    #[stage]
     pub fn stage2(ctx: &mut String) -> Result<(), TestErr> {
         ctx.push_str(":stage2");
         Ok(())
@@ -163,12 +166,13 @@ fn test_context_param() {
 #[pipeline(name = "ErrorPipeline", error = "TestErr")]
 mod err_mod {
     use super::TestErr;
+    use pipeline::stage;
     // no explicit imports needed in this module; macros are resolved via `pipeline` re-export
 
-    #[pipeline::stage]
+    #[stage]
     pub fn fail(
         #[unused]
-        #[skip_clear]
+        #[skip_reset]
         _x: &mut u32,
     ) -> Result<(), TestErr> {
         Err(TestErr::Custom)
@@ -190,27 +194,28 @@ fn test_error_propagation() {
 #[pipeline(name = "ComplexPipeline", error = "TestErr")]
 mod complex_mod {
     use super::{CALLS, TestErr};
+    use pipeline::stage;
 
-    #[pipeline::stage]
-    pub fn a(#[skip_clear] x: &mut u32) -> Result<(), TestErr> {
+    #[stage]
+    pub fn a(#[skip_reset] x: &mut u32) -> Result<(), TestErr> {
         CALLS.with(|c| c.borrow_mut().push("a"));
         *x = 1;
         Ok(())
     }
 
-    #[pipeline::stage]
-    pub fn b(#[skip_clear] y: &mut u32) -> Result<(), TestErr> {
+    #[stage]
+    pub fn b(#[skip_reset] y: &mut u32) -> Result<(), TestErr> {
         CALLS.with(|c| c.borrow_mut().push("b"));
         *y = 10;
         Ok(())
     }
 
-    #[pipeline::stage]
+    #[stage]
     pub fn c(
         x: &u32,
         y: &u32,
         #[unused]
-        #[skip_clear]
+        #[skip_reset]
         z: &mut u32,
     ) -> Result<(), TestErr> {
         CALLS.with(|c| c.borrow_mut().push("c"));
@@ -236,20 +241,21 @@ fn test_complex_order() {
     assert_eq!(p.z, 11);
 }
 
-// === Test 6: skip_clear behaviour with Vector ===
-// This pipeline demonstrates that `#[skip_clear]` allows a counter to accumulate across runs
+// === Test 6: skip_reset behaviour with Vector ===
+// This pipeline demonstrates that `#[skip_reset]` allows a counter to accumulate across runs
 // while a `Vector` of values is reset by the pipeline.  The first stage pushes the current
 // count into a vector, then increments it.  We call `compute()` twice and verify that
 // the counter increments while the vector does not accumulate old values.
 #[pipeline(name = "MixedPipeline", error = "TestErr")]
 mod mixed_mod {
     use super::TestErr;
+    use pipeline::stage;
     use pipeline::value::Vector;
 
-    #[pipeline::stage]
+    #[stage]
     pub fn generate(
         #[unused]
-        #[skip_clear]
+        #[skip_reset]
         count: &mut u32,
         #[unused] data: &mut Vector<u32>,
     ) -> Result<(), TestErr> {
@@ -259,7 +265,7 @@ mod mixed_mod {
         Ok(())
     }
 
-    #[pipeline::stage]
+    #[stage]
     pub fn read(#[unused] _data: &Vector<u32>) -> Result<(), TestErr> {
         // do nothing; ensures the pipeline reads the vector
         Ok(())
@@ -291,13 +297,14 @@ fn test_skip_clear_behavior() {
 #[pipeline(name = "MultiProducerPipeline", error = "TestErr")]
 mod mp_mod {
     use super::{CALLS, TestErr};
+    use pipeline::stage;
 
-    #[pipeline::stage]
+    #[stage]
     pub fn produce_xy(
         #[unused]
-        #[skip_clear]
+        #[skip_reset]
         x: &mut u32,
-        #[skip_clear] y: &mut u32,
+        #[skip_reset] y: &mut u32,
     ) -> Result<(), TestErr> {
         CALLS.with(|c| c.borrow_mut().push("produce_xy"));
         *x = 2;
@@ -305,19 +312,19 @@ mod mp_mod {
         Ok(())
     }
 
-    #[pipeline::stage]
-    pub fn produce_z(#[skip_clear] z: &mut u32) -> Result<(), TestErr> {
+    #[stage]
+    pub fn produce_z(#[skip_reset] z: &mut u32) -> Result<(), TestErr> {
         CALLS.with(|c| c.borrow_mut().push("produce_z"));
         *z = 5;
         Ok(())
     }
 
-    #[pipeline::stage]
+    #[stage]
     pub fn consume_yz(
         y: &u32,
         z: &u32,
         #[unused]
-        #[skip_clear]
+        #[skip_reset]
         w: &mut u32,
     ) -> Result<(), TestErr> {
         CALLS.with(|c| c.borrow_mut().push("consume_yz"));
@@ -351,14 +358,15 @@ fn test_multi_producer() {
 #[pipeline(name = "RenameMultiPipeline", error = "TestErr")]
 mod ren_multi_mod {
     use super::TestErr;
+    use pipeline::stage;
 
-    #[pipeline::stage]
+    #[stage]
     pub fn init_fields(
         #[rename = "x"]
-        #[skip_clear]
+        #[skip_reset]
         x_alias: &mut u32,
         #[rename = "y"]
-        #[skip_clear]
+        #[skip_reset]
         y_alias: &mut u32,
     ) -> Result<(), TestErr> {
         *x_alias = 4;
@@ -366,13 +374,13 @@ mod ren_multi_mod {
         Ok(())
     }
 
-    #[pipeline::stage]
+    #[stage]
     pub fn sum_fields(
         x: &u32,
         y: &u32,
         #[unused]
         #[rename = "sum"]
-        #[skip_clear]
+        #[skip_reset]
         s_alias: &mut u32,
     ) -> Result<(), TestErr> {
         *s_alias = *x + *y;

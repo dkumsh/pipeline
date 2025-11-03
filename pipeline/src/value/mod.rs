@@ -1,4 +1,4 @@
-use crate::{ClearUpdated, Error};
+use crate::{Error, Reset};
 
 pub mod vector;
 pub use vector::Vector;
@@ -58,7 +58,7 @@ impl<T> Value<T> {
     }
 }
 
-impl<T> ClearUpdated for Value<T> {
+impl<T> Reset for Value<T> {
     type Error = Error;
     fn clear_updated(&mut self) -> Result<(), Error> {
         if let State::Updated(_) = self.state
