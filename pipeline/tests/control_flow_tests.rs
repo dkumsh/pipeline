@@ -2,8 +2,8 @@
 use pipeline::{pipeline, stage};
 use std::ops::ControlFlow;
 
-/// A tiny helper we can mutate and then detect whether `clear_updated_all()`
-/// was called after a run (or upon early `Break` when clear_updated_on_break = true).
+/// A tiny helper we can mutate and then detect whether `reset_all()`
+/// was called after a run (or upon early `Break` when reset_on_break = true).
 #[derive(Default, Debug, Clone, Copy)]
 struct Flag {
     // Anything you mutate makes it an output in the pipeline graph.
@@ -22,7 +22,7 @@ impl pipeline::Reset for Flag {
     }
 }
 
-// ---------- Test 1: Early Break with Result<ControlFlow<..>> and clear_updated_on_break = true ----------
+// ---------- Test 1: Early Break with Result<ControlFlow<..>> and reset_on_break = true ----------
 
 #[derive(Debug)]
 enum MyBreak {
@@ -39,7 +39,7 @@ enum AppError {
     name = "ConvergePipe",
     error = "AppError",
     controlflow_break = "MyBreak",
-    clear_updated_on_break = "true"
+    reset_on_break = "true"
 )]
 mod m1 {
     use super::*;
@@ -74,8 +74,8 @@ fn controlflow_break_returns_break_and_clears_when_reset_on_break_true() -> Resu
             ControlFlow::Continue(()) => continue,
             ControlFlow::Break(MyBreak::ConvergedAt(n)) => {
                 assert_eq!(n, 3, "should break exactly at the limit");
-                // clear_updated_on_break="true" → clear_updated_all() was called by macro
-                assert!(p.counter.cleared, "clear_updated_all() must run on Break");
+                // reset_on_break="true" → reset_all() was called by macro
+                assert!(p.counter.cleared, "reset_all() must run on Break");
                 return Ok(());
             }
         }
@@ -89,7 +89,7 @@ fn controlflow_break_returns_break_and_clears_when_reset_on_break_true() -> Resu
     name = "RunToEndPipe",
     error = "AppError",
     controlflow_break = "MyBreak",   // break type declared…
-    clear_updated_on_break = "true"   // …but stage never returns Break
+    reset_on_break = "true"   // …but stage never returns Break
 )]
 mod m2 {
     use super::*;
@@ -133,13 +133,13 @@ fn controlflow_continue_completes_and_clears_at_end() -> Result<(), AppError> {
     panic!("did not reach limit {} within {} iterations", p.limit, CAP);
 }
 
-// ---------- Test 3: clear_updated_on_break = false keeps flags uncleared on early Break ----------
+// ---------- Test 3: reset_on_break = false keeps flags uncleared on early Break ----------
 
 #[pipeline(
     name = "NoClearOnBreakPipe",
     error = "AppError",
     controlflow_break = "MyBreak",
-    clear_updated_on_break = "false"
+    reset_on_break = "false"
 )]
 mod m3 {
     use super::*;
@@ -165,7 +165,7 @@ fn controlflow_break_does_not_clear_when_reset_on_break_false() -> Result<(), Ap
         ControlFlow::Break(MyBreak::ConvergedAt(1)) => {
             assert!(
                 !p.counter.cleared,
-                "flags must remain uncleared on Break when clear_updated_on_break=false"
+                "flags must remain uncleared on Break when reset_on_break=false"
             );
         }
         _ => panic!("expected Break(MyBreak::ConvergedAt(1))"),
