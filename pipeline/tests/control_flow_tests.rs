@@ -8,15 +8,15 @@ use std::ops::ControlFlow;
 struct Flag {
     // Anything you mutate makes it an output in the pipeline graph.
     ticks: u32,
-    // We flip this inside `Reset::clear_updated`.
+    // We flip this inside `Reset::reset`.
     cleared: bool,
 }
 
 // Implement the pipeline crate’s clearing trait so the macro-generated code
-// can call `Reset::clear_updated(&mut Flag)`.
+// can call `Reset::reset(&mut Flag)`.
 impl pipeline::Reset for Flag {
     type Error = pipeline::Error;
-    fn clear_updated(&mut self) -> Result<(), Self::Error> {
+    fn reset(&mut self) -> Result<(), Self::Error> {
         self.cleared = true;
         Ok(())
     }

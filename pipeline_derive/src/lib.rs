@@ -488,7 +488,7 @@ fn generate_impl(
             let name = ident.to_string();
             if output_vars.contains(&name) {
                 Some(quote! {
-                    #main_crate_ident::Reset::clear_updated(&mut self.#ident)
+                    #main_crate_ident::Reset::reset(&mut self.#ident)
                         .map_err(|e| -> #error_ty { e.into() })?;
                 })
             } else {

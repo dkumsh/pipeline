@@ -10,5 +10,5 @@ pub enum Error {
 
 pub trait Reset {
     type Error;
-    fn clear_updated(&mut self) -> Result<(), Self::Error>;
+    fn reset(&mut self) -> Result<(), Self::Error>;
 }
