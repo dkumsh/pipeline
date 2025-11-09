@@ -1,6 +1,7 @@
 extern crate proc_macro;
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
+use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 
 use syn::{
@@ -8,6 +9,7 @@ use syn::{
     PatType, Type,
     parse::{Parse, ParseStream},
     parse_macro_input, parse_quote,
+    spanned::Spanned,
 };
 // Compile the template into the derive crate binary:
 const HTML_TEMPLATE: &str = include_str!(concat!(
@@ -27,6 +29,7 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mod_ident = module.ident.clone();
 
     let pipeline_name = attr_args.name;
+    let pipeline_generics = attr_args.generics.as_ref();
     let pipeline_name_str = quote! {#pipeline_name}.to_string();
     let constructor_args = attr_args.args;
     let context_names = &attr_args.context_names;
@@ -77,11 +80,12 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
     let (nodes_json, edges_json) = generate_html_data(&stages, context_names);
 
     // Generate the struct (context is not included)
-    let struct_def = generate_struct(&pipeline_name, &fields, &pipeline_vars);
+    let struct_def = generate_struct(&pipeline_name, pipeline_generics, &fields, &pipeline_vars);
 
     // Generate the impl block
     let impl_block = generate_impl(
         &pipeline_name,
+        pipeline_generics,
         &constructor_args,
         &fields,
         &compute_calls,
@@ -114,6 +118,7 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
 struct PipelineArgs {
     /// Name of the pipeline container type
     name: Ident,
+    generics: Option<syn::Generics>,
     /// Names of the pipeline constructor arguments, parameters provided via the `new`.
     /// They are passed to stages as parameters.
     args: Vec<Ident>,
@@ -128,6 +133,7 @@ struct PipelineArgs {
 impl Parse for PipelineArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut name = None;
+        let mut generics: Option<syn::Generics> = None;
         let mut args = Vec::new();
         let mut context_names: Vec<Ident> = Vec::new();
         let mut error_ty = None;
@@ -140,6 +146,18 @@ impl Parse for PipelineArgs {
             if key == "name" {
                 let value: LitStr = input.parse()?;
                 name = Some(format_ident!("{}", value.value()));
+            } else if key == "generics" {
+                let value: LitStr = input.parse()?;
+                let raw = value.value();
+                // Allow users to pass either "<T, const N: usize>" or "T, const N: usize".
+                let normalized = if raw.trim().starts_with('<') {
+                    raw
+                } else {
+                    format!("<{}>", raw)
+                };
+                let g = syn::parse_str::<syn::Generics>(&normalized)
+                    .map_err(|e| syn::Error::new(value.span(), format!("invalid generics: {e}")))?;
+                generics = Some(g);
             } else if key == "args" {
                 let value: LitStr = input.parse()?;
                 args = value
@@ -177,7 +195,7 @@ impl Parse for PipelineArgs {
             } else {
                 return Err(syn::Error::new_spanned(
                     key,
-                    "Expected 'name', 'args', 'context', 'error', 'controlflow_break', or 'reset_on_break' in pipeline attribute",
+                    "Expected 'name', 'generics', 'args', 'context', 'error', 'controlflow_break', or 'reset_on_break' in pipeline attribute",
                 ));
             }
             if input.peek(syn::Token![,]) {
@@ -194,6 +212,7 @@ impl Parse for PipelineArgs {
 
         Ok(PipelineArgs {
             name,
+            generics,
             args,
             context_names,
             error_ty,
@@ -416,21 +435,59 @@ fn collect_fields(
     (fields, field_names, pipeline_vars)
 }
 
+/// Build an optional PhantomData field/init to keep generic params "used".
+fn build_phantom_tokens(generics: &syn::Generics) -> (TokenStream2, TokenStream2) {
+    if generics.params.is_empty() {
+        return (quote! {}, quote! {});
+    }
+    let mut args: Vec<TokenStream2> = Vec::new();
+    for p in &generics.params {
+        match p {
+            syn::GenericParam::Lifetime(lt) => {
+                let lt = &lt.lifetime;
+                args.push(quote! { &#lt () });
+            }
+            syn::GenericParam::Type(ty) => {
+                let id = &ty.ident;
+                args.push(quote! { #id });
+            }
+            syn::GenericParam::Const(k) => {
+                let id = &k.ident;
+                // encode const params in the type position
+                args.push(quote! { [(); #id] });
+            }
+        }
+    }
+    let field = quote! {
+        __phantom: ::core::marker::PhantomData<fn(#(#args),*)>,
+    };
+    let init = quote! {
+        __phantom: ::core::marker::PhantomData
+    };
+    (field, init)
+}
+
 fn generate_struct(
     pipeline_name: &Ident,
+    generics: Option<&syn::Generics>,
     fields: &[(Ident, Type)],
     pipeline_vars: &[String],
 ) -> proc_macro2::TokenStream {
+    let g = generics.cloned().unwrap_or_default();
+    let (_impl_g, _ty_g, where_clause) = g.split_for_impl();
     let vars_len = pipeline_vars.len();
-    let field_defs: Vec<_> = fields
+    let field_defs: Vec<TokenStream2> = fields
         .iter()
         .map(|(ident, ty)| quote! { pub #ident: #ty })
         .collect();
 
+    let (phantom_field, _phantom_init) = build_phantom_tokens(&g);
+
     quote! {
-        pub struct #pipeline_name {
+        pub struct #pipeline_name #g #where_clause {
             pub pipeline_vars: [&'static str; #vars_len],
-            #(#field_defs),*
+            #(#field_defs,)*
+            #phantom_field
         }
     }
 }
@@ -438,6 +495,7 @@ fn generate_struct(
 #[allow(clippy::too_many_arguments)]
 fn generate_impl(
     pipeline_name: &Ident,
+    generics: Option<&syn::Generics>,
     constructor_args: &[Ident],
     fields: &[(Ident, Type)],
     compute_calls: &[proc_macro2::TokenStream],
@@ -452,6 +510,11 @@ fn generate_impl(
     break_ty: Option<&Type>,
     main_crate_ident: &Ident,
 ) -> proc_macro2::TokenStream {
+    let g = generics.cloned().unwrap_or_default();
+    let (impl_generics, ty_generics, where_clause) = g.split_for_impl();
+    let (phantom_field, phantom_init) = build_phantom_tokens(&g);
+    let _ = phantom_field; // field already emitted in struct; only need init here
+
     let constructor_params: Vec<_> = constructor_args
         .iter()
         .filter_map(|ident| {
@@ -522,12 +585,12 @@ fn generate_impl(
     if let Some(bt) = break_ty {
         quote! {
 
-            impl #pipeline_name {
+            impl #impl_generics #pipeline_name #ty_generics #where_clause {
                 pub fn new(#(#constructor_params),*) -> Self {
                     Self {
                         pipeline_vars: [#(#pipeline_vars_init),*],
-                        #(#constructor_inits),*
-                    }
+                        #(#constructor_inits,)*
+                        #phantom_init                    }
                 }
                 /// Executes all stages in topological order, with early-exit support.
                 pub fn compute(#compute_params) -> Result<::std::ops::ControlFlow<#bt>, #error_ty> {
@@ -563,11 +626,12 @@ fn generate_impl(
         }
     } else {
         quote! {
-            impl #pipeline_name {
+            impl #impl_generics #pipeline_name #ty_generics #where_clause {
                 pub fn new(#(#constructor_params),*) -> Self {
                     Self {
                         pipeline_vars: [#(#pipeline_vars_init),*],
-                        #(#constructor_inits),*
+                        #(#constructor_inits,)*
+                        #phantom_init
                     }
                 }
 
@@ -1166,9 +1230,6 @@ fn normalized_target_ident(attrs: &[Attribute], pat_ident: &Ident) -> Ident {
         format_ident!("{}", trimmed)
     }
 }
-
-// Import Spanned for error reporting
-use syn::spanned::Spanned;
 
 // Extracts #[rename = "field"] or #[rename("field")] into Some("field"), else None.
 fn get_rename_attr(attrs: &[Attribute]) -> Option<String> {

@@ -14,6 +14,7 @@
 - [Quick start](#quick-start)
 - [Stages and binding rules](#stages-and-binding-rules)
 - [Multiple contexts](#multiple-contexts)
+- [Generics](#generics)
 - [Attributes](#attributes)
 - [Compile-time guarantees & diagnostics](#compile-time-guarantees--diagnostics)
 - [Diagrams](#diagrams)
@@ -186,6 +187,33 @@ mod two_ctx {
 
 ---
 
+### Generics
+
+Pipelines can be generic. Use generics = "…" to declare lifetime, type, and const parameters.
+You can reference these parameters in context types, and in other attribute types like error and controlflow_break.
+
+```rust
+use pipeline::{pipeline, stage};
+
+#[derive(Default)]
+struct Db<T> { count: T }
+#[derive(Default)]
+struct Cache<T> { total: T }
+
+#[pipeline(
+  name="App",
+  generics="<'a, T: Copy + Default, const N: usize>",
+  context="db, cache",
+  error="crate::Error<T>",
+  controlflow_break="crate::EarlyStop<'a, T>"
+)]
+mod app {
+// stages that mention T/'a/N should themselves be generic, like normal Rust
+}
+```
+
+---
+
 ## Attributes
 
 - `#[pipeline(name="TypeName", args="…", context="…", error="…", controlflow_break="…", clear_updated_on_break="true|false")]`
@@ -275,6 +303,14 @@ Model it as a single reducer stage that takes both inputs and writes once. The p
 **Q: Can I use multiple contexts?**  
 Yes. List them in `context = "…"`; normalization and type-checking apply per context name.
 
+---
+### What changed / how it works
+
+- **New attribute**: `generics="…"` accepts a full Rust generics clause. You can write either `"<T, const N: usize>"` or `"T, const N: usize"`; both are accepted.
+- The generated items now look like:
+  ```rust
+  pub struct App<'a, T, const N: usize> /* where ... */ { /* fields..., */ __phantom: PhantomData<fn(&'a (), T, [(); N])>, }
+  impl<'a, T, const N: usize> App<'a, T, N> /* where ... */ { /* new, compute, ... */ }
 ---
 
 ## License
