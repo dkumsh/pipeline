@@ -29,3 +29,12 @@ test:
 # execute benchmarks
 bench:
     cargo bench
+
+# run pipeline examples
+examples:
+    cargo run --example rename_example
+    cargo run --example generics_contexts
+    cargo run --example two_contexts
+    cargo run --example early_break
+    cargo run --example moving_average
+    cargo run --example reset
