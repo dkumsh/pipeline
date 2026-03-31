@@ -6,7 +6,7 @@ readme = "README.md"
 keywords = ["pipeline", "dataflow", "dag", "macro", "workflow"]
 description = "Compile‑time pipeline DSL for structuring computations"
 edition = "2024"
-version = "0.1.0"
+version = "0.1.1"
 
 [workspace]
 resolver = "2"

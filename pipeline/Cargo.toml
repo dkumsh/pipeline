@@ -12,7 +12,7 @@ keywords.workspace = true
 chrono = { workspace = true }
 thiserror = { workspace = true }
 bitvec = { workspace = true }
-pipeline-dsl-macros = { path = "../pipeline_derive", version="0.1.0"}
+pipeline-dsl-macros = { path = "../pipeline_derive", version="0.1.1"}
 
 [lib]
 name = "pipeline"
