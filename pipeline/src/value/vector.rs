@@ -127,6 +127,17 @@ impl<V> Vector<V> {
         self.data.get_mut(index)
     }
 
+    /// Returns a mutable reference to the element at the given index without
+    /// updating dirty tracking.
+    ///
+    /// This is useful when callers want to reuse or clear previously touched
+    /// storage between compute cycles without reporting a fresh update to
+    /// downstream stages.
+    #[inline]
+    pub fn get_mut_untracked(&mut self, index: usize) -> Option<&mut V> {
+        self.data.get_mut(index)
+    }
+
     /// Appends an element to the back of the `Vector`, marking it as updated.
     pub fn push(&mut self, value: V) {
         self.data.push(value);
@@ -298,6 +309,24 @@ mod tests {
         assert_eq!(vec.get(0), Some(&100));
         assert_eq!(vec.indices.len(), 0);
         assert!(vec.all_updated());
+    }
+
+    #[test]
+    fn test_get_mut_untracked_does_not_mark_updated() -> Result<(), Error> {
+        let mut vec = Vector::new();
+        vec.push(String::from("a"));
+        vec.push(String::from("b"));
+        vec.reset()?;
+
+        if let Some(value) = vec.get_mut_untracked(1) {
+            value.clear();
+        }
+
+        assert_eq!(vec.get(1).map(String::as_str), Some(""));
+        assert!(!vec.is_updated());
+        assert!(!vec.all_updated());
+        assert!(vec.iter_updated().next().is_none());
+        Ok(())
     }
 
     #[test]
