@@ -260,7 +260,7 @@ mod mixed_mod {
         #[unused] data: &mut Vector<u32>,
     ) -> Result<(), TestErr> {
         // push the current count then increment it
-        data.push(*count);
+        data.push_committed(*count);
         *count += 1;
         Ok(())
     }
@@ -279,14 +279,14 @@ fn test_skip_clear_behavior() {
     p.compute().expect("first compute should succeed");
     assert_eq!(p.count, 1);
     assert_eq!(p.data.len(), 1);
-    assert_eq!(p.data.get(0).unwrap(), &0_u32);
+    assert_eq!(p.data.get_valid(0).unwrap(), &0_u32);
     // Second run: count starts at 1, becomes 2.  The vector now contains the previous
     // value 0 and the new value 1; it is not cleared between runs.
     p.compute().expect("second compute should succeed");
     assert_eq!(p.count, 2);
     assert_eq!(p.data.len(), 2);
-    assert_eq!(p.data.get(0).unwrap(), &0_u32);
-    assert_eq!(p.data.get(1).unwrap(), &1_u32);
+    assert_eq!(p.data.get_valid(0).unwrap(), &0_u32);
+    assert_eq!(p.data.get_valid(1).unwrap(), &1_u32);
 }
 
 // === Test 7: multi‑producer order and values ===

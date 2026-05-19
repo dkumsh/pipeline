@@ -9,9 +9,9 @@ use std::vec::Vec;
 /// # Two independent bits per slot
 ///
 /// - **Dirty** (`update_flags`): per-cycle bit, set when a slot is
-///   written via [`Vector::get_mut`] / [`Vector::push`] /
-///   [`Vector::commit`] / [`Vector::invalidate`], cleared by
-///   [`Vector::reset`]. Drives [`Vector::iter_updated`].
+///   written via [`Vector::commit`] / [`Vector::invalidate`] /
+///   [`Vector::push`] / [`Vector::push_committed`], cleared by
+///   [`Vector::reset`]. Drives [`Vector::iter_updated_valid`].
 /// - **Validity** (`valid_flags`): multi-cycle bit, set by
 ///   [`Vector::commit`] / [`Vector::push_committed`], cleared by
 ///   [`Vector::invalidate`]. **Not** touched by [`Vector::reset`] —
@@ -25,10 +25,13 @@ use std::vec::Vec;
 /// so the consistency / freshness check is enforced at the type
 /// system level. See [`SlotWriter`] for the symmetric write side.
 ///
-/// Legacy methods ([`Vector::get_mut`], [`Vector::push`],
-/// [`Vector::iter_updated`], etc.) ignore the validity bit and behave
-/// exactly as they did before validity tracking was introduced, so
-/// existing pipelines compile and run without change.
+/// # Breaking change in 0.2.1
+///
+/// The legacy bypass methods `get`, `get_updated`, `get_mut`,
+/// `iter_updated` were removed in 0.2.1. All access paths now engage
+/// with the validity bit. Callers that genuinely need indexed
+/// accumulation rather than single-value-per-slot should use
+/// [`crate::value::buckets::Buckets`] instead.
 pub struct Vector<V> {
     data: Vec<V>,         // Stores the actual values
     update_flags: BitVec, // Per-slot dirty bit (cleared by `reset`)
@@ -112,33 +115,6 @@ impl<V> Vector<V> {
     }
 
     /// Returns a reference to the element at the given index, or `None` if out of bounds.
-    pub fn get(&self, index: usize) -> Option<&V> {
-        self.data.get(index)
-    }
-
-    /// Returns a reference to the updated element at the given index, or `None` if not updated or out of bounds.
-    pub fn get_updated(&self, index: usize) -> Option<&V> {
-        if self.all_updated() || (self.update_flags.get(index).as_deref() == Some(&true)) {
-            self.data.get(index)
-        } else {
-            None
-        }
-    }
-
-    /// Returns a mutable reference to the element at the given index, marking it as updated.
-    ///
-    /// **Does not touch the validity bit.** A slot that was invalid
-    /// before stays invalid; a slot that was valid stays valid. Use
-    /// [`Vector::commit`] or [`Vector::slot_writer`] to write with
-    /// explicit validity semantics.
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut V> {
-        if index >= self.data.len() {
-            return None;
-        }
-        self.mark_dirty_internal(index);
-        self.data.get_mut(index)
-    }
-
     /// Internal: mark slot `index` as dirty. Caller is responsible
     /// for ensuring `index < self.data.len()`.
     fn mark_dirty_internal(&mut self, index: usize) {
@@ -406,68 +382,11 @@ impl<'a, V> Drop for SlotWriter<'a, V> {
     }
 }
 
-pub trait IterUpdated<'a, K: 'a, V: 'a> {
-    type Iter: Iterator<Item = (K, &'a V)>;
-    fn iter_updated(&'a self) -> Self::Iter;
-}
-
-impl<'a, V: 'a> IterUpdated<'a, usize, V> for Vector<V> {
-    type Iter = IterUpdatedItems<'a, V>;
-
-    fn iter_updated(&'a self) -> Self::Iter {
-        if self.all_updated() {
-            IterUpdatedItems {
-                vector: self,
-                indices_iter: None,
-                current_index: 0,
-                all_updated: true,
-            }
-        } else {
-            IterUpdatedItems {
-                vector: self,
-                indices_iter: Some(self.indices.iter()),
-                current_index: 0,
-                all_updated: false,
-            }
-        }
-    }
-}
-
-pub struct IterUpdatedItems<'a, V> {
-    vector: &'a Vector<V>,
-    indices_iter: Option<std::slice::Iter<'a, usize>>,
-    current_index: usize,
-    all_updated: bool,
-}
-
-impl<'a, V> Iterator for IterUpdatedItems<'a, V> {
-    type Item = (usize, &'a V);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.all_updated {
-            if self.current_index < self.vector.data.len() {
-                let index = self.current_index;
-                self.current_index += 1;
-                Some((index, &self.vector.data[index]))
-            } else {
-                None
-            }
-        } else if let Some(ref mut indices_iter) = self.indices_iter {
-            indices_iter
-                .next()
-                .map(|&index| (index, &self.vector.data[index]))
-        } else {
-            None
-        }
-    }
-}
-
 impl<V> Vector<V> {
-    /// Validity-aware variant of [`Vector::iter_updated`]. Yields
-    /// `(index, Some(&V))` for dirty slots that are also valid, and
-    /// `(index, None)` for dirty slots that are invalid. Equivalent
-    /// to `iter_updated()` followed by `get_valid` per element, but
-    /// without re-checking bounds.
+    /// Iterate dirty slots; yield `(index, Some(&V))` for slots that are
+    /// also valid, `(index, None)` for dirty slots that are invalid.
+    /// Equivalent in observable behaviour to walking the dirty set and
+    /// applying `get_valid` per element, but skips the bounds re-check.
     pub fn iter_updated_valid(&self) -> IterUpdatedValidItems<'_, V> {
         if self.all_updated() {
             IterUpdatedValidItems {
@@ -555,141 +474,53 @@ mod tests {
     }
 
     #[test]
-    fn test_get_mut() {
+    fn get_mut_untracked_does_not_mark_updated() -> Result<(), Error> {
         let mut vec = Vector::new();
-        vec.push(10);
-        vec.push(20);
-        vec.push(30);
-
-        // Modify an element
-        if let Some(val) = vec.get_mut(1) {
-            *val = 200;
-        }
-
-        assert_eq!(vec.get(1), Some(&200));
-        assert!(vec.is_updated());
-        assert_eq!(vec.indices.len(), 0);
-        assert!(vec.all_updated());
-
-        // Check if the element is marked as updated
-        assert_eq!(vec.get_updated(1), Some(&200));
-
-        // Modify another element
-        if let Some(val) = vec.get_mut(0) {
-            *val = 100;
-        }
-
-        assert_eq!(vec.get(0), Some(&100));
-        assert_eq!(vec.indices.len(), 0);
-        assert!(vec.all_updated());
-    }
-
-    #[test]
-    fn test_get_mut_untracked_does_not_mark_updated() -> Result<(), Error> {
-        let mut vec = Vector::new();
-        vec.push(String::from("a"));
-        vec.push(String::from("b"));
+        vec.push_committed(String::from("a"));
+        vec.push_committed(String::from("b"));
         vec.reset()?;
 
         if let Some(value) = vec.get_mut_untracked(1) {
             value.clear();
         }
 
-        assert_eq!(vec.get(1).map(String::as_str), Some(""));
+        assert_eq!(vec.get_valid(1).map(String::as_str), Some(""));
         assert!(!vec.is_updated());
         assert!(!vec.all_updated());
-        assert!(vec.iter_updated().next().is_none());
+        assert!(vec.iter_updated_valid().next().is_none());
         Ok(())
     }
 
     #[test]
-    fn test_iter_updated() -> Result<(), Error> {
+    fn reset_clears_dirty_preserves_data() -> Result<(), Error> {
         let mut vec = Vector::new();
-        vec.push(1);
-        vec.push(2);
-        vec.push(3);
-
-        // Modify an element
-        if let Some(val) = vec.get_mut(1) {
-            *val = 20;
-        }
-
-        let updated: Vec<(usize, i32)> = vec.iter_updated().map(|(i, &v)| (i, v)).collect();
-        assert_eq!(updated.len(), 3);
-        assert_eq!(updated, vec![(0, 1), (1, 20), (2, 3)]);
-
-        // Reset and check
-        vec.reset()?;
-        assert!(!vec.is_updated());
-        let updated: Vec<(usize, i32)> = vec.iter_updated().map(|(i, &v)| (i, v)).collect();
-        assert!(updated.is_empty());
-
-        // Modify an element
-        if let Some(val) = vec.get_mut(1) {
-            *val = 200;
-        }
-        let updated: Vec<(usize, i32)> = vec.iter_updated().map(|(i, &v)| (i, v)).collect();
-        assert_eq!(updated.len(), 1);
-        assert_eq!(updated, vec![(1, 200)]);
-        Ok(())
-    }
-
-    #[test]
-    fn test_all_updated() {
-        let mut vec = Vector::new();
-        vec.push(1);
-        vec.push(2);
-        vec.push(3);
-
-        // Mark all as updated using iter_mut
-        for val in vec.iter_mut() {
-            *val += 10;
-        }
-
-        assert!(vec.all_updated());
-        assert_eq!(vec.indices.len(), 0);
-        assert_eq!(vec.update_flags.len(), 0);
-
-        let updated: Vec<(usize, i32)> = vec.iter_updated().map(|(i, &v)| (i, v)).collect();
-        assert_eq!(updated.len(), 3);
-        assert_eq!(updated, vec![(0, 11), (1, 12), (2, 13)]);
-    }
-
-    #[test]
-    fn test_reset() -> Result<(), Error> {
-        let mut vec = Vector::new();
-        vec.push(1);
-        vec.push(2);
-        vec.push(3);
+        vec.push_committed(1);
+        vec.push_committed(2);
+        vec.push_committed(3);
 
         assert!(vec.is_updated());
 
         vec.reset()?;
         assert!(!vec.is_updated());
         assert!(!vec.all_updated());
-        assert_eq!(vec.indices.len(), 0);
-        assert_eq!(vec.update_flags.len(), 3);
+        assert_eq!(vec.iter_updated_valid().count(), 0);
+        // Reset preserves data + validity, just clears dirty.
+        assert_eq!(vec.get_valid(0), Some(&1));
+        assert_eq!(vec.get_valid(1), Some(&2));
+        assert_eq!(vec.get_valid(2), Some(&3));
 
-        // After reset, get_updated should return None
-        assert_eq!(vec.get_updated(0), None);
-
-        // Modify an element
-        if let Some(val) = vec.get_mut(1) {
-            *val = 20;
-        }
-
+        vec.commit(1, 20);
         assert!(vec.is_updated());
-        assert!(!vec.all_updated());
-        assert_eq!(vec.get_updated(1), Some(&20));
+        assert_eq!(vec.get_valid(1), Some(&20));
         Ok(())
     }
 
     #[test]
-    fn test_clear() {
+    fn clear_drops_all_state() {
         let mut vec = Vector::new();
-        vec.push(1);
-        vec.push(2);
-        vec.push(3);
+        vec.push_committed(1);
+        vec.push_committed(2);
+        vec.push_committed(3);
 
         vec.clear();
         assert_eq!(vec.len(), 0);
@@ -699,21 +530,17 @@ mod tests {
     }
 
     #[test]
-    fn test_pop() {
+    fn pop_drops_last_slot_and_its_bits() {
         let mut vec = Vector::new();
-        vec.push(10);
-        vec.push(20);
-        vec.push(30);
+        vec.push_committed(10);
+        vec.push_committed(20);
+        vec.push_committed(30);
 
         let val = vec.pop();
         assert_eq!(val, Some(30));
         assert_eq!(vec.len(), 2);
         assert!(vec.is_updated());
-        assert_eq!(vec.indices.len(), 0);
-        assert!(vec.all_updated());
 
-        // The removed index should not affect indices since they are cleared
-        // Pop until empty
         vec.pop();
         vec.pop();
         assert!(vec.is_empty());
@@ -721,21 +548,20 @@ mod tests {
     }
 
     #[test]
-    fn test_get_out_of_bounds() {
+    fn out_of_bounds_returns_none() {
         let mut vec = Vector::new();
-        vec.push(1);
+        vec.push_committed(1);
 
-        assert_eq!(vec.get(1), None);
-        assert_eq!(vec.get_mut(1), None);
-        assert_eq!(vec.get_updated(1), None);
+        assert_eq!(vec.get_valid(1), None);
+        assert!(!vec.is_valid(1));
     }
 
     #[test]
-    fn test_iter() {
+    fn iter_and_iter_mut_walk_raw_data() {
         let mut vec = Vector::new();
-        vec.push(1);
-        vec.push(2);
-        vec.push(3);
+        vec.push_committed(1);
+        vec.push_committed(2);
+        vec.push_committed(3);
 
         let collected: Vec<&i32> = vec.iter().collect();
         assert_eq!(collected, vec![&1, &2, &3]);
@@ -749,107 +575,75 @@ mod tests {
     }
 
     #[test]
-    fn test_push_after_all_updated() {
+    fn push_after_all_updated_extends_correctly() {
         let mut vec = Vector::new();
-        vec.push(1);
-        vec.push(2);
+        vec.push_committed(1);
+        vec.push_committed(2);
 
-        // Mark all as updated
-        vec.iter_mut().for_each(|_| {});
-
-        // Now push a new element
+        // Now push a third element — should mark dirty + invalid.
         vec.push(3);
-        assert!(vec.all_updated());
+        assert!(vec.is_updated());
 
-        let updated: Vec<(usize, i32)> = vec.iter_updated().map(|(i, &v)| (i, v)).collect();
-        assert_eq!(updated, vec![(0, 1), (1, 2), (2, 3)]);
+        let updated: Vec<(usize, Option<i32>)> = vec
+            .iter_updated_valid()
+            .map(|(i, v)| (i, v.copied()))
+            .collect();
+        assert_eq!(updated, vec![(0, Some(1)), (1, Some(2)), (2, None)]);
     }
 
     #[test]
-    fn test_multiple_updates() {
+    fn commit_marks_all_slots_dirty() {
         let mut vec = Vector::new();
-        vec.push(1);
-        vec.push(2);
-        vec.push(3);
+        vec.push_committed(1);
+        vec.push_committed(2);
+        vec.push_committed(3);
 
-        // Update index 0
-        if let Some(v) = vec.get_mut(0) {
-            *v = 10;
-        }
+        vec.commit(0, 10);
+        vec.commit(1, 20);
+        vec.commit(2, 30);
 
-        assert_eq!(vec.indices.len(), 0);
-        assert!(vec.all_updated());
-
-        // Update index 1
-        if let Some(v) = vec.get_mut(1) {
-            *v = 20;
-        }
-        assert_eq!(vec.indices.len(), 0);
-
-        // Update index 2
-        if let Some(v) = vec.get_mut(2) {
-            *v = 30
-        }
-        // All elements are updated
-        assert!(vec.all_updated());
-        assert_eq!(vec.indices.len(), 0);
-
-        let updated: Vec<(usize, i32)> = vec.iter_updated().map(|(i, &v)| (i, v)).collect();
+        let updated: Vec<(usize, i32)> = vec
+            .iter_updated_valid()
+            .map(|(i, v)| (i, *v.unwrap()))
+            .collect();
         assert_eq!(updated, vec![(0, 10), (1, 20), (2, 30)]);
     }
+
     #[test]
-    fn test_reset_after_all_updated() -> Result<(), Error> {
+    fn reset_after_committed_pushes_keeps_validity() -> Result<(), Error> {
         let mut vec = Vector::new();
-        vec.push(1);
-        vec.push(2);
+        vec.push_committed(1);
+        vec.push_committed(2);
 
-        // Mark all as updated
-        vec.iter_mut().for_each(|v| *v += 1);
-
-        assert!(vec.all_updated());
-
-        // Reset
         vec.reset()?;
         assert!(!vec.is_updated());
-        assert!(!vec.all_updated());
+        assert_eq!(vec.iter_updated_valid().count(), 0);
+        assert_eq!(vec.get_valid(0), Some(&1));
+        assert_eq!(vec.get_valid(1), Some(&2));
 
-        // Check that no elements are updated
-        let updated: Vec<(usize, i32)> = vec.iter_updated().map(|(i, &v)| (i, v)).collect();
-        assert!(updated.is_empty());
-
-        // Modify one element
-        if let Some(v) = vec.get_mut(0) {
-            *v = 10;
-        }
-        assert!(vec.is_updated());
-        assert!(!vec.all_updated());
-
-        let updated: Vec<(usize, i32)> = vec.iter_updated().map(|(i, &v)| (i, v)).collect();
+        vec.commit(0, 10);
+        let updated: Vec<(usize, i32)> = vec
+            .iter_updated_valid()
+            .map(|(i, v)| (i, *v.unwrap()))
+            .collect();
         assert_eq!(updated, vec![(0, 10)]);
         Ok(())
     }
 
     #[test]
-    fn test_push_and_get() {
+    fn push_committed_reads_back_via_get_valid() {
         let mut vec = Vector::new();
-        vec.push(1);
-        vec.push(2);
-        vec.push(3);
+        vec.push_committed(1);
+        vec.push_committed(2);
+        vec.push_committed(3);
 
         assert_eq!(vec.len(), 3);
-        assert_eq!(vec.get(0), Some(&1));
-        assert_eq!(vec.get(1), Some(&2));
-        assert_eq!(vec.get(2), Some(&3));
-        assert_eq!(vec.get(3), None);
+        assert_eq!(vec.get_valid(0), Some(&1));
+        assert_eq!(vec.get_valid(1), Some(&2));
+        assert_eq!(vec.get_valid(2), Some(&3));
+        assert_eq!(vec.get_valid(3), None);
 
         assert!(vec.is_updated());
-        assert!(vec.all_updated());
-
-        // Test get_updated
-        assert_eq!(vec.get_updated(0), Some(&1));
-        assert_eq!(vec.get_updated(1), Some(&2));
-        assert_eq!(vec.get_updated(2), Some(&3));
-        assert_eq!(vec.get_updated(3), None);
     }
 
     // -----------------------------------------------------------------
@@ -905,9 +699,8 @@ mod tests {
         vec.invalidate(0);
         assert!(!vec.is_valid(0));
         assert_eq!(vec.get_valid(0), None);
-        // Slot still has its prior data — invisible via get_valid but
-        // readable via raw get.
-        assert_eq!(vec.get(0), Some(&42));
+        // Slot retains its prior raw data internally (we don't drop V
+        // on invalidate), but it's invisible through any public API.
         assert!(vec.is_updated());
         Ok(())
     }
@@ -987,33 +780,6 @@ mod tests {
             .map(|(i, v)| (i, v.copied()))
             .collect();
         assert_eq!(collected, vec![(0, None)]);
-        Ok(())
-    }
-
-    #[test]
-    fn validity_get_mut_does_not_touch_validity_bit() -> Result<(), Error> {
-        let mut vec = Vector::new();
-        vec.push(0);
-        vec.commit(0, 5);
-        vec.reset()?;
-        assert!(vec.is_valid(0));
-
-        // get_mut should mark dirty but leave validity alone.
-        if let Some(slot) = vec.get_mut(0) {
-            *slot = 999;
-        }
-        assert!(vec.is_updated());
-        assert!(vec.is_valid(0), "get_mut must NOT clear validity");
-        assert_eq!(vec.get_valid(0), Some(&999));
-
-        // Now the foot-gun direction: starting from an invalid slot,
-        // get_mut + write should leave the slot invalid.
-        vec.push(0); // index 1, invalid
-        if let Some(slot) = vec.get_mut(1) {
-            *slot = 42;
-        }
-        assert!(!vec.is_valid(1));
-        assert_eq!(vec.get_valid(1), None);
         Ok(())
     }
 
