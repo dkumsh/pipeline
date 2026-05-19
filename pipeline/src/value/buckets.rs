@@ -79,6 +79,16 @@ impl<T> Buckets<T> {
 
     /// Resizes the number of buckets, preserving contents for retained slots
     /// and leaving the container clean (no touched buckets) afterwards.
+    ///
+    /// **Caller responsibility:** this is a *silent dirty-reset* — the
+    /// `touched` list is cleared even for retained slots that were
+    /// touched in the current cycle. Intended for config-time sizing,
+    /// not mid-cycle resize. If you call this from inside a pipeline
+    /// stage between an upstream push and a downstream `iter_updated`,
+    /// the downstream consumer will see the buckets as untouched and
+    /// skip them. If you need a mid-cycle resize that preserves the
+    /// dirty signal for retained slots, copy this implementation and
+    /// keep the relevant `touched` indices instead of clearing.
     pub fn resize_buckets(&mut self, count: usize) {
         self.buckets.resize_with(count, Vec::new);
         self.touched.clear();
@@ -110,8 +120,14 @@ impl<T> Buckets<T> {
         Ok(())
     }
 
-    /// Iterates over touched buckets in first-touch order, yielding
-    /// `(index, &Vec<T>)` for each. An untouched bucket is not yielded.
+    /// Iterates over touched buckets, yielding `(index, &Vec<T>)` for
+    /// each. An untouched bucket is not yielded.
+    ///
+    /// **Iteration order is first-touch order, *not* bucket-index
+    /// order.** If you push to bucket `2`, then bucket `0`, then
+    /// bucket `1`, the iterator yields them as `(2, _), (0, _),
+    /// (1, _)`. Downstream consumers that need index-ordered iteration
+    /// should collect and sort, or maintain their own dirty set.
     pub fn iter_updated(&self) -> impl Iterator<Item = (usize, &Vec<T>)> {
         self.touched
             .iter()
