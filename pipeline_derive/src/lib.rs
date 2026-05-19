@@ -427,7 +427,7 @@ fn collect_fields(
     }
 
     let mut fields: Vec<(Ident, Type)> = fields_map.values().cloned().collect();
-    fields.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
+    fields.sort_by_key(|f| f.0.to_string());
 
     let field_names = fields.iter().map(|(ident, _)| ident.clone()).collect();
     let pipeline_vars = fields.iter().map(|(ident, _)| ident.to_string()).collect();
