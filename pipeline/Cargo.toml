@@ -11,7 +11,6 @@ keywords.workspace = true
 [dependencies]
 chrono = { workspace = true }
 thiserror = { workspace = true }
-bitvec = { workspace = true }
 pipeline-dsl-macros = { path = "../pipeline_derive", version="0.2.1"}
 
 [lib]

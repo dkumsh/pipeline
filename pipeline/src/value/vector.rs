@@ -1,23 +1,27 @@
 use crate::Error;
 use crate::Reset;
-use bitvec::prelude::*;
 use std::vec::Vec;
+
+#[inline]
+fn word_bit(i: usize) -> (usize, usize) {
+    (i / 64, i % 64)
+}
 
 /// A `Vec`-like container with per-slot **dirty** *and* **validity**
 /// tracking.
 ///
 /// # Two independent bits per slot
 ///
-/// - **Dirty** (`update_flags`): per-cycle bit, set when a slot is
-///   written via [`Vector::commit`] / [`Vector::invalidate`] /
-///   [`Vector::push`] / [`Vector::push_committed`], cleared by
-///   [`Vector::reset`]. Drives [`Vector::iter_updated_valid`].
-/// - **Validity** (`valid_flags`): multi-cycle bit, set by
-///   [`Vector::commit`] / [`Vector::push_committed`], cleared by
-///   [`Vector::invalidate`]. **Not** touched by [`Vector::reset`] —
-///   a slot that was valid at end of cycle stays valid at start of
-///   the next cycle. Drives [`Vector::get_valid`] and
-///   [`Vector::iter_updated_valid`].
+/// - **Dirty** (`dirty`): per-cycle bit, set when a slot is written
+///   via [`Vector::commit`] / [`Vector::invalidate`] /
+///   [`Vector::push`] / [`Vector::push_committed`] / [`Vector::update`],
+///   cleared by [`Vector::reset`]. Drives [`Vector::iter_updated_valid`].
+/// - **Validity** (`valid`): multi-cycle bit, set by
+///   [`Vector::commit`] / [`Vector::push_committed`] /
+///   [`Vector::update`], cleared by [`Vector::invalidate`]. **Not**
+///   touched by [`Vector::reset`] — a slot that was valid at end of
+///   cycle stays valid at start of the next cycle. Drives
+///   [`Vector::get_valid`] and [`Vector::iter_updated_valid`].
 ///
 /// The validity bit gives pipeline stages an `Option`-like read API:
 /// a downstream stage that reads via [`Vector::get_valid`] cannot
@@ -33,11 +37,14 @@ use std::vec::Vec;
 /// accumulation rather than single-value-per-slot should use
 /// [`crate::value::buckets::Buckets`] instead.
 pub struct Vector<V> {
-    data: Vec<V>,         // Stores the actual values
-    update_flags: BitVec, // Per-slot dirty bit (cleared by `reset`)
-    valid_flags: BitVec,  // Per-slot validity bit (persists across `reset`)
-    indices: Vec<usize>,  // Indices of updated elements for efficient iteration
-    is_updated: bool,     // Flag to indicate if any element is updated
+    data: Vec<V>,
+    /// Per-slot dirty bits, packed 64 per `u64`. Cleared by `reset`.
+    dirty: Vec<u64>,
+    /// Per-slot validity bits, packed 64 per `u64`. Persists across `reset`.
+    valid: Vec<u64>,
+    /// O(1) "anything dirty?" and "how many dirty?" — incremented on
+    /// every transition `0 → 1` and decremented on `1 → 0`.
+    dirty_count: usize,
 }
 
 impl<V> Default for Vector<V> {
@@ -51,41 +58,42 @@ impl<V> Vector<V> {
     pub fn new() -> Self {
         Self {
             data: Vec::new(),
-            update_flags: BitVec::new(),
-            valid_flags: BitVec::new(),
-            indices: Vec::new(),
-            is_updated: false,
+            dirty: Vec::new(),
+            valid: Vec::new(),
+            dirty_count: 0,
         }
     }
 
     /// Creates a `Vector` with the specified capacity.
     pub fn with_capacity(capacity: usize) -> Self {
+        let words = capacity.div_ceil(64);
         Self {
             data: Vec::with_capacity(capacity),
-            update_flags: BitVec::with_capacity(capacity),
-            valid_flags: BitVec::with_capacity(capacity),
-            indices: Vec::with_capacity(capacity),
-            is_updated: false,
+            dirty: Vec::with_capacity(words),
+            valid: Vec::with_capacity(words),
+            dirty_count: 0,
         }
     }
 
     /// Returns `true` if any element in the `Vector` is updated.
+    #[inline]
     pub fn is_updated(&self) -> bool {
-        self.is_updated
+        self.dirty_count != 0
     }
 
-    /// Returns `true` if all elements in the `Vector` are updated.
+    /// Returns `true` if every element in the `Vector` is updated.
+    /// Returns `false` for an empty `Vector`.
+    #[inline]
     pub fn all_updated(&self) -> bool {
-        self.is_updated && self.indices.is_empty()
+        !self.data.is_empty() && self.dirty_count == self.data.len()
     }
 
     /// Clears the `Vector`, removing all values.
     pub fn clear(&mut self) {
         self.data.clear();
-        self.update_flags.clear();
-        self.valid_flags.clear();
-        self.indices.clear();
-        self.is_updated = false;
+        self.dirty.clear();
+        self.valid.clear();
+        self.dirty_count = 0;
     }
 
     /// Returns the number of elements in the `Vector`.
@@ -106,38 +114,55 @@ impl<V> Vector<V> {
     /// Returns a mutable iterator over the elements of the `Vector`.
     /// Marks all elements as updated.
     pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, V> {
-        if !self.all_updated() {
-            self.is_updated = true;
-            self.indices.clear();
-            self.update_flags.clear();
+        let len = self.data.len();
+        if self.dirty_count < len {
+            let full_words = len / 64;
+            let rem = len % 64;
+            for w in 0..full_words {
+                self.dirty[w] = u64::MAX;
+            }
+            if rem != 0 {
+                self.dirty[full_words] = (1u64 << rem) - 1;
+            }
+            self.dirty_count = len;
         }
         self.data.iter_mut()
     }
 
-    /// Returns a reference to the element at the given index, or `None` if out of bounds.
     /// Internal: mark slot `index` as dirty. Caller is responsible
-    /// for ensuring `index < self.data.len()`.
+    /// for ensuring `index < self.data.len()` and the dirty word
+    /// for `index` already exists in `self.dirty`.
+    #[inline]
     fn mark_dirty_internal(&mut self, index: usize) {
-        if self.all_updated() {
-            // All elements are already updated
-            return;
+        let (w, b) = word_bit(index);
+        let mask = 1u64 << b;
+        if (self.dirty[w] & mask) == 0 {
+            self.dirty[w] |= mask;
+            self.dirty_count += 1;
         }
-        // Ensure `update_flags` is large enough
-        if index >= self.update_flags.len() {
-            self.update_flags.resize(self.data.len(), false);
-        }
-        // Mark this index as updated
-        if self.update_flags.get(index).as_deref() != Some(&true) {
-            self.update_flags.set(index, true);
-            self.indices.push(index);
-            self.is_updated = true;
+    }
 
-            // Check if all elements are now updated
-            if self.indices.len() == self.data.len() {
-                // All elements are updated; optimize storage
-                self.indices.clear();
-                self.update_flags.clear();
-            }
+    /// Internal: set or clear the validity bit for slot `index`.
+    #[inline]
+    fn set_valid_internal(&mut self, index: usize, value: bool) {
+        let (w, b) = word_bit(index);
+        let mask = 1u64 << b;
+        if value {
+            self.valid[w] |= mask;
+        } else {
+            self.valid[w] &= !mask;
+        }
+    }
+
+    /// Internal: extend `dirty` and `valid` so they cover slot
+    /// `self.data.len() - 1` (called after a push has already
+    /// extended `self.data`).
+    #[inline]
+    fn extend_bitsets_for_last_push(&mut self) {
+        let new_idx = self.data.len() - 1;
+        if new_idx.is_multiple_of(64) {
+            self.dirty.push(0);
+            self.valid.push(0);
         }
     }
 
@@ -161,22 +186,10 @@ impl<V> Vector<V> {
     /// afterwards.
     pub fn push(&mut self, value: V) {
         self.data.push(value);
-        self.valid_flags.push(false);
-        if self.all_updated() {
-            // All elements are updated; no need to track individually
-        } else {
-            // Mark new element as updated
-            self.update_flags.push(true);
-            self.indices.push(self.data.len() - 1);
-            self.is_updated = true;
-
-            // Check if all elements are now updated
-            if self.indices.len() == self.data.len() {
-                // All elements are updated; optimize storage
-                self.indices.clear();
-                self.update_flags.clear();
-            }
-        }
+        self.extend_bitsets_for_last_push();
+        let idx = self.data.len() - 1;
+        // valid stays 0 (invalid placeholder).
+        self.mark_dirty_internal(idx);
     }
 
     /// Like [`Vector::push`], but the new slot is marked **valid**.
@@ -187,57 +200,33 @@ impl<V> Vector<V> {
     /// becomes valid explicit.
     pub fn push_committed(&mut self, value: V) {
         self.data.push(value);
-        self.valid_flags.push(true);
-        if self.all_updated() {
-            // All elements are updated; no need to track individually
-        } else {
-            self.update_flags.push(true);
-            self.indices.push(self.data.len() - 1);
-            self.is_updated = true;
-
-            if self.indices.len() == self.data.len() {
-                self.indices.clear();
-                self.update_flags.clear();
-            }
-        }
+        self.extend_bitsets_for_last_push();
+        let idx = self.data.len() - 1;
+        self.set_valid_internal(idx, true);
+        self.mark_dirty_internal(idx);
     }
 
     /// Removes the last element from the `Vector` and returns it, or `None` if empty.
     pub fn pop(&mut self) -> Option<V> {
-        let value = self.data.pop();
-        if value.is_some() {
-            let index = self.data.len(); // Index of the removed element
-
-            // Always pop the validity bit alongside data.
-            self.valid_flags.pop();
-
-            if self.all_updated() {
-                // All elements are updated; no need to modify `indices` or `update_flags`
-            } else {
-                self.update_flags.pop();
-
-                // Remove index from `indices` if present
-                if let Some(pos) = self.indices.iter().position(|&i| i == index) {
-                    let last = self.indices.len() - 1;
-                    if pos != last {
-                        // Swap the element at 'pos' with the last element
-                        self.indices.swap(pos, last);
-                    }
-                    // Remove the last element
-                    self.indices.pop();
-                }
-            }
-
-            // **Update `is_updated` flag appropriately**
-            if self.data.is_empty() {
-                // If the vector is empty, there are no updates
-                self.is_updated = false;
-            } else {
-                // Otherwise, update based on remaining elements
-                self.is_updated = self.all_updated() || !self.indices.is_empty();
-            }
+        if self.data.is_empty() {
+            return None;
         }
-        value
+        let idx = self.data.len() - 1;
+        let (w, b) = word_bit(idx);
+        let mask = 1u64 << b;
+        // If the popped slot was dirty, decrement the count.
+        if (self.dirty[w] & mask) != 0 {
+            self.dirty_count -= 1;
+        }
+        // Clear both bits for the popped slot.
+        self.dirty[w] &= !mask;
+        self.valid[w] &= !mask;
+        // If the popped slot owned the last word entirely, drop it.
+        if idx.is_multiple_of(64) {
+            self.dirty.pop();
+            self.valid.pop();
+        }
+        self.data.pop()
     }
 
     // -------------------------------------------------------------
@@ -249,11 +238,11 @@ impl<V> Vector<V> {
     /// is out of bounds.
     #[inline]
     pub fn is_valid(&self, index: usize) -> bool {
-        self.valid_flags
-            .get(index)
-            .as_deref()
-            .copied()
-            .unwrap_or(false)
+        if index >= self.data.len() {
+            return false;
+        }
+        let (w, b) = word_bit(index);
+        (self.valid[w] & (1u64 << b)) != 0
     }
 
     /// Returns a reference to slot `index` if (and only if) it is
@@ -279,7 +268,7 @@ impl<V> Vector<V> {
             self.data.len()
         );
         self.data[index] = value;
-        self.valid_flags.set(index, true);
+        self.set_valid_internal(index, true);
         self.mark_dirty_internal(index);
     }
 
@@ -311,7 +300,7 @@ impl<V> Vector<V> {
             self.data.len()
         );
         f(&mut self.data[index]);
-        self.valid_flags.set(index, true);
+        self.set_valid_internal(index, true);
         self.mark_dirty_internal(index);
     }
 
@@ -325,7 +314,7 @@ impl<V> Vector<V> {
             index,
             self.data.len()
         );
-        self.valid_flags.set(index, false);
+        self.set_valid_internal(index, false);
         self.mark_dirty_internal(index);
     }
 
@@ -359,10 +348,10 @@ impl<V> Reset for Vector<V> {
     /// multi-cycle.
     type Error = Error;
     fn reset(&mut self) -> Result<(), Error> {
-        self.update_flags.clear();
-        self.update_flags.resize(self.data.len(), false);
-        self.indices.clear();
-        self.is_updated = false;
+        for w in &mut self.dirty {
+            *w = 0;
+        }
+        self.dirty_count = 0;
         Ok(())
     }
 }
@@ -415,62 +404,77 @@ impl<'a, V> Drop for SlotWriter<'a, V> {
 }
 
 impl<V> Vector<V> {
-    /// Iterate dirty slots; yield `(index, Some(&V))` for slots that are
-    /// also valid, `(index, None)` for dirty slots that are invalid.
-    /// Equivalent in observable behaviour to walking the dirty set and
-    /// applying `get_valid` per element, but skips the bounds re-check.
+    /// Iterate dirty slots in **ascending index order**, yielding
+    /// `(index, Some(&V))` for slots that are also valid and
+    /// `(index, None)` for dirty slots that are invalid.
     pub fn iter_updated_valid(&self) -> IterUpdatedValidItems<'_, V> {
-        if self.all_updated() {
-            IterUpdatedValidItems {
-                vector: self,
-                indices_iter: None,
-                current_index: 0,
-                all_updated: true,
-            }
-        } else {
-            IterUpdatedValidItems {
-                vector: self,
-                indices_iter: Some(self.indices.iter()),
-                current_index: 0,
-                all_updated: false,
-            }
-        }
+        IterUpdatedValidItems::new(self)
     }
 }
 
 /// Iterator returned by [`Vector::iter_updated_valid`]. Yields
 /// `(usize, Option<&V>)` for every **dirty** slot, where the `Option`
-/// reflects the slot's **validity**.
+/// reflects the slot's **validity**. Always in ascending index order.
 pub struct IterUpdatedValidItems<'a, V> {
     vector: &'a Vector<V>,
-    indices_iter: Option<std::slice::Iter<'a, usize>>,
-    current_index: usize,
-    all_updated: bool,
+    word_idx: usize,
+    word: u64,
+}
+
+impl<'a, V> IterUpdatedValidItems<'a, V> {
+    fn new(v: &'a Vector<V>) -> Self {
+        let mut it = Self {
+            vector: v,
+            word_idx: 0,
+            word: 0,
+        };
+        it.advance_to_nonzero();
+        it
+    }
+
+    fn advance_to_nonzero(&mut self) {
+        while self.word == 0 && self.word_idx < self.vector.dirty.len() {
+            let mut w = self.vector.dirty[self.word_idx];
+            // Mask padding bits in the last word so we don't yield
+            // indices >= data.len().
+            if self.word_idx + 1 == self.vector.dirty.len() {
+                let rem = self.vector.data.len() % 64;
+                if rem != 0 {
+                    w &= (1u64 << rem) - 1;
+                }
+            }
+            self.word = w;
+            if self.word != 0 {
+                break;
+            }
+            self.word_idx += 1;
+        }
+    }
 }
 
 impl<'a, V> Iterator for IterUpdatedValidItems<'a, V> {
     type Item = (usize, Option<&'a V>);
 
     fn next(&mut self) -> Option<Self::Item> {
-        let index = if self.all_updated {
-            if self.current_index < self.vector.data.len() {
-                let i = self.current_index;
-                self.current_index += 1;
-                i
-            } else {
+        if self.word == 0 {
+            self.advance_to_nonzero();
+            if self.word == 0 {
                 return None;
             }
-        } else if let Some(ref mut indices_iter) = self.indices_iter {
-            *indices_iter.next()?
-        } else {
-            return None;
-        };
-        let opt = if self.vector.is_valid(index) {
-            Some(&self.vector.data[index])
+        }
+        let tz = self.word.trailing_zeros() as usize;
+        let idx = self.word_idx * 64 + tz;
+        // Pop the bit from the snapshot word.
+        self.word &= self.word - 1;
+        let opt = if self.vector.is_valid(idx) {
+            Some(&self.vector.data[idx])
         } else {
             None
         };
-        Some((index, opt))
+        if self.word == 0 {
+            self.word_idx += 1;
+        }
+        Some((idx, opt))
     }
 }
 
@@ -492,9 +496,12 @@ mod tests {
         let mut vec: Vector<i32> = Vector::with_capacity(10);
         assert_eq!(vec.len(), 0);
         assert_eq!(vec.data.capacity(), 10);
-        assert_eq!(vec.update_flags.len(), 0);
-        assert_eq!(vec.valid_flags.len(), 0);
-        assert_eq!(vec.indices.capacity(), 10);
+        // 10 slots fit in a single u64 word, so the bitsets reserve
+        // exactly one word.
+        assert!(vec.dirty.capacity() >= 1);
+        assert!(vec.valid.capacity() >= 1);
+        assert_eq!(vec.dirty.len(), 0);
+        assert_eq!(vec.valid.len(), 0);
         assert!(!vec.is_valid(0));
 
         vec.push_committed(42);
