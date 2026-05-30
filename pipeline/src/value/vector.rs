@@ -410,6 +410,15 @@ impl<V> Vector<V> {
     pub fn iter_updated_valid(&self) -> IterUpdatedValidItems<'_, V> {
         IterUpdatedValidItems::new(self)
     }
+
+    /// Iterate **indices** of dirty slots in ascending order. Skips
+    /// the validity check and data lookup that
+    /// [`Vector::iter_updated_valid`] performs — useful when you only
+    /// need the slot indices, e.g. to drive a parallel walk over
+    /// another `Vector` or external array keyed by the same slot.
+    pub fn iter_updated_indices(&self) -> IterUpdatedIndices<'_> {
+        IterUpdatedIndices::new(&self.dirty, self.data.len())
+    }
 }
 
 /// Iterator returned by [`Vector::iter_updated_valid`]. Yields
@@ -475,6 +484,66 @@ impl<'a, V> Iterator for IterUpdatedValidItems<'a, V> {
             self.word_idx += 1;
         }
         Some((idx, opt))
+    }
+}
+
+/// Iterator returned by [`Vector::iter_updated_indices`]. Yields the
+/// `usize` index of every **dirty** slot in ascending order, with no
+/// validity check or data lookup.
+pub struct IterUpdatedIndices<'a> {
+    dirty: &'a [u64],
+    total_len: usize,
+    word_idx: usize,
+    word: u64,
+}
+
+impl<'a> IterUpdatedIndices<'a> {
+    fn new(dirty: &'a [u64], total_len: usize) -> Self {
+        let mut it = Self {
+            dirty,
+            total_len,
+            word_idx: 0,
+            word: 0,
+        };
+        it.advance_to_nonzero();
+        it
+    }
+
+    fn advance_to_nonzero(&mut self) {
+        while self.word == 0 && self.word_idx < self.dirty.len() {
+            let mut w = self.dirty[self.word_idx];
+            if self.word_idx + 1 == self.dirty.len() {
+                let rem = self.total_len % 64;
+                if rem != 0 {
+                    w &= (1u64 << rem) - 1;
+                }
+            }
+            self.word = w;
+            if self.word != 0 {
+                break;
+            }
+            self.word_idx += 1;
+        }
+    }
+}
+
+impl<'a> Iterator for IterUpdatedIndices<'a> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.word == 0 {
+            self.advance_to_nonzero();
+            if self.word == 0 {
+                return None;
+            }
+        }
+        let tz = self.word.trailing_zeros() as usize;
+        let idx = self.word_idx * 64 + tz;
+        self.word &= self.word - 1;
+        if self.word == 0 {
+            self.word_idx += 1;
+        }
+        Some(idx)
     }
 }
 
@@ -888,6 +957,67 @@ mod tests {
         let mut vec: Vector<i32> = Vector::new();
         vec.push_committed(7);
         vec.update(1, |v| *v += 1);
+    }
+
+    // -----------------------------------------------------------------
+    // iter_updated_indices tests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn iter_updated_indices_yields_dirty_in_ascending_order() -> Result<(), Error> {
+        let mut vec = Vector::new();
+        for _ in 0..5 {
+            vec.push_committed(0);
+        }
+        vec.reset()?;
+        assert_eq!(vec.iter_updated_indices().count(), 0);
+
+        // Commit out of order; iter must still yield in ascending order.
+        vec.commit(3, 30);
+        vec.commit(0, 10);
+        vec.commit(4, 40);
+
+        let got: Vec<usize> = vec.iter_updated_indices().collect();
+        assert_eq!(got, vec![0, 3, 4]);
+        Ok(())
+    }
+
+    #[test]
+    fn iter_updated_indices_handles_word_boundaries() {
+        // Touch slots straddling word boundaries (63 / 64 / 127 / 128).
+        let mut vec: Vector<u32> = Vector::new();
+        for _ in 0..200 {
+            vec.push(0);
+        }
+        // Reset so only the commits below count.
+        vec.reset().unwrap();
+        for &i in &[0_usize, 63, 64, 127, 128, 199] {
+            vec.commit(i, i as u32);
+        }
+        let got: Vec<usize> = vec.iter_updated_indices().collect();
+        assert_eq!(got, vec![0, 63, 64, 127, 128, 199]);
+    }
+
+    #[test]
+    fn iter_updated_indices_empty_when_nothing_dirty() -> Result<(), Error> {
+        let mut vec: Vector<i32> = Vector::new();
+        assert_eq!(vec.iter_updated_indices().count(), 0);
+
+        vec.push_committed(1);
+        vec.reset()?;
+        assert_eq!(vec.iter_updated_indices().count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn iter_updated_indices_ignores_validity() {
+        // Dirty + invalid slot must still show up — this iterator
+        // is index-only and doesn't gate on validity.
+        let mut vec: Vector<i32> = Vector::new();
+        vec.push(0); // dirty, invalid
+        vec.push_committed(99); // dirty, valid
+        let got: Vec<usize> = vec.iter_updated_indices().collect();
+        assert_eq!(got, vec![0, 1]);
     }
 
     #[test]

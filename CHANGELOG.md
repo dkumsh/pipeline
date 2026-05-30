@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Vector::update<F: FnOnce(&mut V)>(index, f)` — in-place mutation
   closure that marks the slot valid + dirty. Useful for large `V`
   to avoid the full-struct move that `Vector::commit(i, value)` does.
+- `Vector::iter_updated_indices()` — yields only the `usize` indices
+  of dirty slots, in ascending order. Skips the validity check and
+  data lookup that `iter_updated_valid` performs; useful for driving
+  a parallel walk over another `Vector` or external array keyed by
+  the same slot.
 
 ### Changed
 
