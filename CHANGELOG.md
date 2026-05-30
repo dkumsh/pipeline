@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data lookup that `iter_updated_valid` performs; useful for driving
   a parallel walk over another `Vector` or external array keyed by
   the same slot.
+- `Vector::from_vec(Vec<V>)` and `Vector::from_fill(value, len)` —
+  bulk constructors. Every slot starts **valid** and **clean** (no
+  dirty bits set), matching the "loaded from saved state" pattern.
+- `Vector::as_slice() -> &[V]` — returns the full underlying slice
+  regardless of per-slot validity / dirty state.
 
 ### Changed
 

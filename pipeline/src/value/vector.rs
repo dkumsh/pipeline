@@ -75,6 +75,52 @@ impl<V> Vector<V> {
         }
     }
 
+    /// Bulk constructor from an existing `Vec<V>`. Every slot starts
+    /// **valid** and **clean** (no dirty bits set), matching the
+    /// "loaded from saved state" pattern: downstream consumers can
+    /// read via [`Vector::get_valid`] but won't see a fresh round of
+    /// `iter_updated_*` events until something is committed or
+    /// invalidated.
+    pub fn from_vec(data: Vec<V>) -> Self {
+        let len = data.len();
+        let words = len.div_ceil(64);
+        let mut valid = vec![0u64; words];
+        // Set the valid bit for every existing slot.
+        let full_words = len / 64;
+        let rem = len % 64;
+        for w in &mut valid[..full_words] {
+            *w = u64::MAX;
+        }
+        if rem != 0 {
+            valid[full_words] = (1u64 << rem) - 1;
+        }
+        Self {
+            data,
+            dirty: vec![0u64; words],
+            valid,
+            dirty_count: 0,
+        }
+    }
+
+    /// Bulk constructor filled with `len` clones of `value`. Same
+    /// dirty / valid semantics as [`Vector::from_vec`]: every slot
+    /// starts valid + clean.
+    pub fn from_fill(value: V, len: usize) -> Self
+    where
+        V: Clone,
+    {
+        Self::from_vec(vec![value; len])
+    }
+
+    /// Returns the full underlying slice of values, regardless of
+    /// per-slot validity or dirty state. Useful for bulk read paths
+    /// where the caller has already established validity through
+    /// other means (e.g. tests, snapshot serialisation).
+    #[inline]
+    pub fn as_slice(&self) -> &[V] {
+        &self.data
+    }
+
     /// Returns `true` if any element in the `Vector` is updated.
     #[inline]
     pub fn is_updated(&self) -> bool {
@@ -957,6 +1003,67 @@ mod tests {
         let mut vec: Vector<i32> = Vector::new();
         vec.push_committed(7);
         vec.update(1, |v| *v += 1);
+    }
+
+    // -----------------------------------------------------------------
+    // Bulk-constructor / as_slice tests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn from_vec_loads_clean_and_valid() {
+        let vec = Vector::from_vec(vec![10, 20, 30]);
+        assert_eq!(vec.len(), 3);
+        assert!(!vec.is_updated());
+        assert_eq!(vec.get_valid(0), Some(&10));
+        assert_eq!(vec.get_valid(1), Some(&20));
+        assert_eq!(vec.get_valid(2), Some(&30));
+        // No slots dirty → no iteration events.
+        assert_eq!(vec.iter_updated_valid().count(), 0);
+        assert_eq!(vec.iter_updated_indices().count(), 0);
+    }
+
+    #[test]
+    fn from_vec_empty_is_well_formed() {
+        let vec: Vector<i32> = Vector::from_vec(Vec::new());
+        assert_eq!(vec.len(), 0);
+        assert!(vec.is_empty());
+        assert!(!vec.is_updated());
+        assert!(!vec.all_updated());
+    }
+
+    #[test]
+    fn from_vec_straddles_word_boundary() {
+        // 100 slots spans two u64 words; check both ranges are valid + clean.
+        let data: Vec<u32> = (0..100).collect();
+        let mut vec = Vector::from_vec(data);
+        for i in 0..100 {
+            assert_eq!(vec.get_valid(i), Some(&(i as u32)));
+        }
+        assert!(!vec.is_updated());
+
+        // Writing into a loaded Vector still works.
+        vec.commit(75, 9999);
+        let updated: Vec<usize> = vec.iter_updated_indices().collect();
+        assert_eq!(updated, vec![75]);
+    }
+
+    #[test]
+    fn from_fill_clones_value() {
+        let vec = Vector::from_fill(String::from("hi"), 4);
+        assert_eq!(vec.len(), 4);
+        assert!(!vec.is_updated());
+        for i in 0..4 {
+            assert_eq!(vec.get_valid(i).map(String::as_str), Some("hi"));
+        }
+    }
+
+    #[test]
+    fn as_slice_returns_full_data() {
+        let mut vec = Vector::new();
+        vec.push_committed(1);
+        vec.push_committed(2);
+        vec.push(3); // invalid placeholder
+        assert_eq!(vec.as_slice(), &[1, 2, 3]);
     }
 
     // -----------------------------------------------------------------
