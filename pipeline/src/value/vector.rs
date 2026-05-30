@@ -283,6 +283,38 @@ impl<V> Vector<V> {
         self.mark_dirty_internal(index);
     }
 
+    /// Apply `f` to slot `index` **in place**, then mark the slot
+    /// **valid** and **dirty**.
+    ///
+    /// The point of this method is to mutate a large `V` without
+    /// moving in a fresh value the way [`Vector::commit`] does. For
+    /// a wide value type, `commit(i, fresh)` copies the whole struct
+    /// in; `update(i, |v| v.field = new_field)` writes only the bytes
+    /// that changed.
+    ///
+    /// The closure sees whatever the slot currently stores — the
+    /// prior committed value, the placeholder from a non-
+    /// [`Vector::push_committed`] [`Vector::push`], or stale bytes
+    /// from a slot that was [`Vector::invalidate`]d. Callers that
+    /// care about the prior validity should check
+    /// [`Vector::is_valid`] / [`Vector::get_valid`] first.
+    ///
+    /// Panics if `index` is out of bounds.
+    pub fn update<F>(&mut self, index: usize, f: F)
+    where
+        F: FnOnce(&mut V),
+    {
+        assert!(
+            index < self.data.len(),
+            "Vector::update: index {} out of bounds (len = {})",
+            index,
+            self.data.len()
+        );
+        f(&mut self.data[index]);
+        self.valid_flags.set(index, true);
+        self.mark_dirty_internal(index);
+    }
+
     /// Mark slot `index` **invalid** and **dirty**. The slot retains
     /// its prior data; it just becomes invisible to readers using
     /// [`Vector::get_valid`]. Panics if `index` is out of bounds.
@@ -781,6 +813,74 @@ mod tests {
             .collect();
         assert_eq!(collected, vec![(0, None)]);
         Ok(())
+    }
+
+    #[test]
+    fn update_mutates_in_place_and_marks_valid_dirty() -> Result<(), Error> {
+        // Start with a valid value, reset to drop the dirty flag, then
+        // `update` it. The closure should see the prior value and the
+        // slot should come back dirty + valid.
+        let mut vec = Vector::new();
+        vec.push_committed(vec![1, 2, 3]);
+        vec.reset()?;
+        assert!(!vec.is_updated());
+
+        let mut prior = None;
+        vec.update(0, |v| {
+            prior = Some(v.clone());
+            v.push(4);
+        });
+
+        assert_eq!(prior, Some(vec![1, 2, 3]));
+        assert!(vec.is_valid(0));
+        assert!(vec.is_updated());
+        assert_eq!(vec.get_valid(0), Some(&vec![1, 2, 3, 4]));
+        Ok(())
+    }
+
+    #[test]
+    fn update_on_invalid_slot_makes_it_valid() {
+        // A slot that was `push`ed (placeholder, not valid) becomes
+        // valid after `update` — the closure sees the placeholder
+        // bytes, then we mark it as a real committed value.
+        let mut vec = Vector::new();
+        vec.push(99); // invalid placeholder
+        assert!(!vec.is_valid(0));
+
+        let mut seen_placeholder = None;
+        vec.update(0, |v| {
+            seen_placeholder = Some(*v);
+            *v = 42;
+        });
+
+        assert_eq!(seen_placeholder, Some(99));
+        assert!(vec.is_valid(0));
+        assert_eq!(vec.get_valid(0), Some(&42));
+    }
+
+    #[test]
+    fn update_redirties_after_reset() -> Result<(), Error> {
+        let mut vec = Vector::new();
+        vec.push_committed(10);
+        vec.reset()?;
+        assert!(!vec.is_updated());
+
+        vec.update(0, |v| *v += 5);
+        assert!(vec.is_updated());
+        let collected: Vec<(usize, Option<i32>)> = vec
+            .iter_updated_valid()
+            .map(|(i, v)| (i, v.copied()))
+            .collect();
+        assert_eq!(collected, vec![(0, Some(15))]);
+        Ok(())
+    }
+
+    #[test]
+    #[should_panic(expected = "Vector::update: index 1 out of bounds")]
+    fn update_out_of_bounds_panics() {
+        let mut vec: Vector<i32> = Vector::new();
+        vec.push_committed(7);
+        vec.update(1, |v| *v += 1);
     }
 
     #[test]
