@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-06-03
+
+### Added
+
+- `Vector::is_updated_at(index) -> bool` — per-slot dirty test. O(1)
+  bit read against the internal dirty bitmap. Mirrors `is_valid`'s
+  shape and returns `false` for out-of-bounds indices. Lets downstream
+  code answer "is slot N dirty this cycle?" without materialising the
+  `iter_updated_indices()` output into a parallel set.
+
 ## [0.3.0] - 2026-05-30
 
 ### Added

@@ -291,6 +291,26 @@ impl<V> Vector<V> {
         (self.valid[w] & (1u64 << b)) != 0
     }
 
+    /// Returns `true` if slot `index` was written this cycle (commit
+    /// / update / invalidate / slot_writer.commit). Returns `false`
+    /// if the index is out of bounds, or if the slot's dirty bit was
+    /// cleared by [`Reset::reset`] at end-of-cycle.
+    ///
+    /// Equivalent to looking up `index` in the set produced by
+    /// [`Vector::iter_updated_indices`], but as an O(1) bit test
+    /// rather than an iteration. Use this when you have a fixed slot
+    /// index and want to decide whether to do dirty-driven work on
+    /// it — avoids the per-cycle materialisation that
+    /// `iter_updated_indices().collect::<HashSet<_>>()` would force.
+    #[inline]
+    pub fn is_updated_at(&self, index: usize) -> bool {
+        if index >= self.data.len() {
+            return false;
+        }
+        let (w, b) = word_bit(index);
+        (self.dirty[w] & (1u64 << b)) != 0
+    }
+
     /// Returns a reference to slot `index` if (and only if) it is
     /// **valid**. The Option-like read accessor: mirrors
     /// `Option::as_ref` and forces callers to match on `Some` /
@@ -1155,5 +1175,78 @@ mod tests {
         assert_eq!(vec.len(), 0);
         assert!(vec.is_empty());
         assert!(!vec.is_updated());
+    }
+
+    // -----------------------------------------------------------------
+    // is_updated_at tests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn is_updated_at_tracks_per_slot_dirty() -> Result<(), Error> {
+        let mut vec = Vector::new();
+        for _ in 0..5 {
+            vec.push_committed(0_u32);
+        }
+        // push_committed marks every slot dirty.
+        for i in 0..5 {
+            assert!(vec.is_updated_at(i), "slot {} should be dirty", i);
+        }
+        // After reset, no slots are dirty.
+        vec.reset()?;
+        for i in 0..5 {
+            assert!(!vec.is_updated_at(i), "slot {} should be clean", i);
+        }
+        // Commit specific slots; only those are dirty.
+        vec.commit(1, 10);
+        vec.commit(4, 40);
+        assert!(!vec.is_updated_at(0));
+        assert!(vec.is_updated_at(1));
+        assert!(!vec.is_updated_at(2));
+        assert!(!vec.is_updated_at(3));
+        assert!(vec.is_updated_at(4));
+        Ok(())
+    }
+
+    #[test]
+    fn is_updated_at_out_of_bounds_returns_false() {
+        let mut vec: Vector<u32> = Vector::new();
+        vec.push_committed(0);
+        assert!(vec.is_updated_at(0));
+        assert!(!vec.is_updated_at(1));
+        assert!(!vec.is_updated_at(usize::MAX));
+    }
+
+    #[test]
+    fn is_updated_at_agrees_with_iter_updated_indices() {
+        let mut vec: Vector<u32> = Vector::new();
+        for _ in 0..200 {
+            vec.push(0);
+        }
+        vec.reset().unwrap();
+        for &i in &[0_usize, 63, 64, 127, 128, 199] {
+            vec.commit(i, i as u32);
+        }
+        let dirty: std::collections::HashSet<usize> = vec.iter_updated_indices().collect();
+        for i in 0..200 {
+            assert_eq!(
+                vec.is_updated_at(i),
+                dirty.contains(&i),
+                "mismatch at slot {}",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn is_updated_at_set_by_invalidate() {
+        let mut vec = Vector::new();
+        vec.push_committed(7);
+        vec.reset().unwrap();
+        assert!(!vec.is_updated_at(0));
+        vec.invalidate(0);
+        assert!(
+            vec.is_updated_at(0),
+            "invalidate is a write — should set the dirty bit"
+        );
     }
 }
