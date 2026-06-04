@@ -446,18 +446,26 @@ fn test_external_field() {
     let mut p = ExternalInputPipeline::new();
     assert_eq!(p.leaves.len(), 0);
 
-    // The caller populates the externally-fed field before running.
+    // The caller populates the externally-fed field before running, which marks
+    // the written slots dirty.
     p.leaves.push_committed(1);
     p.leaves.push_committed(2);
+    assert!(p.leaves.is_updated_at(0));
+    assert!(p.leaves.is_updated_at(1));
+
     p.compute().expect("pipeline should run without error");
     assert_eq!(p.synths.len(), 2);
     assert_eq!(p.synths.get_valid(0).unwrap(), &10);
     assert_eq!(p.synths.get_valid(1).unwrap(), &20);
     assert_eq!(p.sum, 30);
 
-    // `leaves` is owned by the caller and never reset by the pipeline; it still
-    // holds exactly what was fed in.
+    // The pipeline clears `leaves`' per-cycle dirty flags at the end of compute,
+    // just like stage outputs — while its contents and validity are preserved.
+    assert!(!p.leaves.is_updated_at(0));
+    assert!(!p.leaves.is_updated_at(1));
     assert_eq!(p.leaves.len(), 2);
+    assert_eq!(p.leaves.get_valid(0).unwrap(), &1);
+    assert_eq!(p.leaves.get_valid(1).unwrap(), &2);
 }
 
 // === Test: external field read by multiple stages ===

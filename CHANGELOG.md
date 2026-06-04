@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-06-04
+
+### Fixed
+
+- `external = "..."` fields now have their per-cycle dirty state cleared at the
+  end of each `compute()`, like stage outputs. In 0.3.2 they were excluded from
+  reset, so dirty flags set by the caller accumulated across cycles instead of
+  being cleared. (0.3.2 is yanked.)
+
 ## [0.3.2] - 2026-06-04
 
 ### Added

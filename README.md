@@ -222,7 +222,8 @@ mod app {
   - `context`: comma-separated context parameter names.
   - `external`: comma-separated externally-fed field names. Each becomes a
     `Default`-initialized `pub` member that no stage writes and the caller
-    populates between `compute()` runs (read-only within stages).
+    populates between `compute()` runs (read-only within stages). Like stage
+    outputs, their per-cycle dirty state is cleared at the end of `compute()`.
   - `error`: custom error type; defaults to `pipeline::Error`.
   - `controlflow_break`: enable early-exit `ControlFlow<BreakTy>` support.
   - `clear_updated_on_break`: clear mutated fields when breaking (optional).

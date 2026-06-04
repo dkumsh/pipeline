@@ -65,8 +65,15 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(e) => return e.to_compile_error().into(),
     };
 
-    // Collect the names of variables written by any stage.  Only these need resetting.
-    let output_vars = collect_outputs(&stages, context_names);
+    // Collect the fields whose per-cycle dirty state the pipeline must clear at the
+    // end of each `compute()`. This is every stage-written field, plus every field
+    // declared `external = "..."`: although no stage produces an external field, the
+    // caller commits into it each cycle (setting dirty flags), so those flags must be
+    // cleared alongside the stage outputs to keep dirty-tracking per-cycle.
+    let mut output_vars = collect_outputs(&stages, context_names);
+    for name in &attr_args.external_names {
+        output_vars.insert(name.to_string());
+    }
 
     // Determine error type: user-specified or default to pipeline::Error
     let error_ty = attr_args
@@ -128,7 +135,8 @@ struct PipelineArgs {
     context_names: Vec<Ident>,
     /// Names of externally-fed fields declared via the `external` attribute.
     /// Each becomes a `Default`-initialized `pub` field that no stage writes and
-    /// the caller populates between `compute()` runs.
+    /// the caller populates between `compute()` runs. Like stage outputs, their
+    /// per-cycle dirty state is cleared by the pipeline at the end of `compute()`.
     external_names: Vec<Ident>,
     error_ty: Option<Type>,
     break_ty: Option<Type>,
