@@ -744,8 +744,7 @@ fn generate_compute_calls(
     let mut output_unused: HashSet<String> = HashSet::new();
     let mut input_unused: HashSet<String> = HashSet::new();
     // Fields declared as externally-fed in the pipeline header via `external = "..."`.
-    let external_inputs: HashSet<String> =
-        external_names.iter().map(|i| i.to_string()).collect();
+    let external_inputs: HashSet<String> = external_names.iter().map(|i| i.to_string()).collect();
 
     // Collect read/write variables for each stage and detect duplicate writers
     for stage in stages {
@@ -821,7 +820,10 @@ fn generate_compute_calls(
     for ext in &external_inputs {
         if let Some(writer) = var_writers.get(ext) {
             return Err(syn::Error::new(
-                writer_spans.get(ext).copied().unwrap_or_else(Span::call_site),
+                writer_spans
+                    .get(ext)
+                    .copied()
+                    .unwrap_or_else(Span::call_site),
                 format!(
                     "variable '{ext}' is declared as an external input via `external = \"...\"` \
                      but is also written by stage '{writer}'; remove the external declaration or \

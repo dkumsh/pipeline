@@ -409,10 +409,7 @@ mod external_input_mod {
     use pipeline::value::Vector;
 
     #[stage]
-    pub fn synthesize(
-        leaves: &Vector<u32>,
-        synths: &mut Vector<u32>,
-    ) -> Result<(), TestErr> {
+    pub fn synthesize(leaves: &Vector<u32>, synths: &mut Vector<u32>) -> Result<(), TestErr> {
         for i in 0..leaves.len() {
             if let Some(v) = leaves.get_valid(i) {
                 synths.push_committed(*v * 10);
@@ -471,7 +468,11 @@ fn test_external_field() {
 // === Test: external field read by multiple stages ===
 // `external = "..."` is declared once in the header regardless of how many
 // stages read the field.
-#[pipeline(name = "HeaderExternalPipeline", error = "TestErr", external = "leaves")]
+#[pipeline(
+    name = "HeaderExternalPipeline",
+    error = "TestErr",
+    external = "leaves"
+)]
 mod header_external_mod {
     use super::TestErr;
     use pipeline::stage;

@@ -112,6 +112,32 @@ impl<V> Vector<V> {
         Self::from_vec(vec![value; len])
     }
 
+    /// Bulk constructor with `len` slots that all start **invalid** and
+    /// **clean**. The backing storage is allocated — so `commit(i, ..)`
+    /// for any `i < len` will not panic — but every slot reads as `None`
+    /// via [`Vector::get_valid`] until the caller commits a value into
+    /// it. Slots hold `V::default()` placeholders that are never exposed
+    /// while invalid.
+    ///
+    /// Useful for an externally-fed buffer of known size whose slots are
+    /// populated incrementally: allocate once with `with_invalid_slots(n)`,
+    /// then `commit` real values as they arrive. Contrast with
+    /// [`Vector::from_fill`], whose slots start **valid**.
+    pub fn with_invalid_slots(len: usize) -> Self
+    where
+        V: Default,
+    {
+        let words = len.div_ceil(64);
+        let mut data = Vec::with_capacity(len);
+        data.resize_with(len, V::default);
+        Self {
+            data,
+            dirty: vec![0u64; words],
+            valid: vec![0u64; words],
+            dirty_count: 0,
+        }
+    }
+
     /// Returns the full underlying slice of values, regardless of
     /// per-slot validity or dirty state. Useful for bulk read paths
     /// where the caller has already established validity through
@@ -1075,6 +1101,34 @@ mod tests {
         for i in 0..4 {
             assert_eq!(vec.get_valid(i).map(String::as_str), Some("hi"));
         }
+    }
+
+    #[test]
+    fn with_invalid_slots_allocates_invalid_and_clean() {
+        let mut vec: Vector<u32> = Vector::with_invalid_slots(3);
+        // Slots are allocated (len reflects them) but all invalid + clean.
+        assert_eq!(vec.len(), 3);
+        assert!(!vec.is_empty());
+        assert!(!vec.is_updated());
+        for i in 0..3 {
+            assert!(!vec.is_valid(i));
+            assert_eq!(vec.get_valid(i), None);
+        }
+        // commit() into a pre-allocated slot does not panic and makes it
+        // valid + dirty; untouched slots stay invalid.
+        vec.commit(1, 42);
+        assert_eq!(vec.get_valid(1), Some(&42));
+        assert!(vec.is_updated_at(1));
+        assert_eq!(vec.get_valid(0), None);
+        assert_eq!(vec.get_valid(2), None);
+    }
+
+    #[test]
+    fn with_invalid_slots_zero_len_is_well_formed() {
+        let vec: Vector<u32> = Vector::with_invalid_slots(0);
+        assert_eq!(vec.len(), 0);
+        assert!(vec.is_empty());
+        assert!(!vec.is_updated());
     }
 
     #[test]

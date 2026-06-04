@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-06-04
+
+### Added
+
+- `Vector::with_invalid_slots(len)` (where `V: Default`) — bulk constructor that
+  pre-allocates `len` slots all starting **invalid** and **clean**. The backing
+  storage is allocated so `commit(i, ..)` for `i < len` won't panic, but each
+  slot reads as `None` via `get_valid` until committed. Mirror of `from_fill`,
+  whose slots start valid; useful for an externally-fed buffer of known size
+  populated incrementally.
+
 ## [0.3.3] - 2026-06-04
 
 ### Fixed
