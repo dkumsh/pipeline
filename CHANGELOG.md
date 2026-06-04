@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-06-04
+
+### Added
+
+- `external = "a, b"` pipeline-header attribute — declares externally-fed
+  fields. Each becomes a `Default`-initialized `pub` member that no stage writes
+  and the caller populates between `compute()` runs, satisfying missing-producer
+  detection without the misleading `#[unused]` or forcing the field into `new()`
+  via `args`. A field declared `external` that is also written by a stage is
+  rejected at compile time.
+
 ## [0.3.1] - 2026-06-03
 
 ### Added

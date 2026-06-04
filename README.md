@@ -110,7 +110,7 @@ fn main() -> Result<(), pipeline::Error> {
 - **`#[rename]`**: override binding name per parameter.
 - **Contexts**: one or more **context parameters** passed to `compute()`; mutability escalates if any stage requires it.
 - **Single-writer enforcement** (&mut targets).
-- **Missing-producer detection** (readers must have a producer or be constructor args/contexts).
+- **Missing-producer detection** (readers must have a producer, be constructor args/contexts, or be declared `external`).
 - **Deterministic topo order** (stable tie-breaking).
 - Optional **diagram emitters** (PlantUML string and HTML graph data).
 
@@ -216,10 +216,13 @@ mod app {
 
 ## Attributes
 
-- `#[pipeline(name="TypeName", args="…", context="…", error="…", controlflow_break="…", clear_updated_on_break="true|false")]`
+- `#[pipeline(name="TypeName", args="…", context="…", external="…", error="…", controlflow_break="…", clear_updated_on_break="true|false")]`
   - `name`: pipeline struct name (required).
   - `args`: comma-separated constructor field names.
   - `context`: comma-separated context parameter names.
+  - `external`: comma-separated externally-fed field names. Each becomes a
+    `Default`-initialized `pub` member that no stage writes and the caller
+    populates between `compute()` runs (read-only within stages).
   - `error`: custom error type; defaults to `pipeline::Error`.
   - `controlflow_break`: enable early-exit `ControlFlow<BreakTy>` support.
   - `clear_updated_on_break`: clear mutated fields when breaking (optional).

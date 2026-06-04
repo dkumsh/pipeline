@@ -57,6 +57,7 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
         context_names,
         &mod_ident,
         &constructor_args,
+        &attr_args.external_names,
         attr_args.break_ty.as_ref(),
         attr_args.reset_on_break,
     ) {
@@ -125,6 +126,10 @@ struct PipelineArgs {
     /// Names of the context parameters provided via the `context` attribute.  The
     /// pipeline macro will infer the type for each name separately.
     context_names: Vec<Ident>,
+    /// Names of externally-fed fields declared via the `external` attribute.
+    /// Each becomes a `Default`-initialized `pub` field that no stage writes and
+    /// the caller populates between `compute()` runs.
+    external_names: Vec<Ident>,
     error_ty: Option<Type>,
     break_ty: Option<Type>,
     reset_on_break: bool,
@@ -136,6 +141,7 @@ impl Parse for PipelineArgs {
         let mut generics: Option<syn::Generics> = None;
         let mut args = Vec::new();
         let mut context_names: Vec<Ident> = Vec::new();
+        let mut external_names: Vec<Ident> = Vec::new();
         let mut error_ty = None;
         let mut break_ty: Option<Type> = None;
         let mut reset_on_break = false;
@@ -172,6 +178,15 @@ impl Parse for PipelineArgs {
                     .split(',')
                     .map(|p| format_ident!("{}", p.trim()))
                     .collect();
+            } else if key == "external" {
+                let value: LitStr = input.parse()?;
+                external_names = value
+                    .value()
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| format_ident!("{}", s))
+                    .collect();
             } else if key == "error" {
                 let value: LitStr = input.parse()?;
                 // Parse the error type from the provided string
@@ -195,7 +210,7 @@ impl Parse for PipelineArgs {
             } else {
                 return Err(syn::Error::new_spanned(
                     key,
-                    "Expected 'name', 'generics', 'args', 'context', 'error', 'controlflow_break', or 'reset_on_break' in pipeline attribute",
+                    "Expected 'name', 'generics', 'args', 'context', 'external', 'error', 'controlflow_break', or 'reset_on_break' in pipeline attribute",
                 ));
             }
             if input.peek(syn::Token![,]) {
@@ -215,6 +230,7 @@ impl Parse for PipelineArgs {
             generics,
             args,
             context_names,
+            external_names,
             error_ty,
             break_ty,
             reset_on_break,
@@ -706,6 +722,7 @@ fn generate_compute_calls(
     context_names: &[Ident],
     mod_ident: &Ident,
     constructor_args: &[Ident],
+    external_names: &[Ident],
     break_ty: Option<&Type>,
     reset_on_break: bool,
 ) -> syn::Result<Vec<proc_macro2::TokenStream>> {
@@ -718,6 +735,9 @@ fn generate_compute_calls(
     let mut stage_infos: HashMap<Ident, StageInfo> = HashMap::new();
     let mut output_unused: HashSet<String> = HashSet::new();
     let mut input_unused: HashSet<String> = HashSet::new();
+    // Fields declared as externally-fed in the pipeline header via `external = "..."`.
+    let external_inputs: HashSet<String> =
+        external_names.iter().map(|i| i.to_string()).collect();
 
     // Collect read/write variables for each stage and detect duplicate writers
     for stage in stages {
@@ -788,10 +808,25 @@ fn generate_compute_calls(
         );
     }
 
+    // A field declared `external = "..."` must not also be written by a stage —
+    // that would contradict "fed from outside, produced by no stage".
+    for ext in &external_inputs {
+        if let Some(writer) = var_writers.get(ext) {
+            return Err(syn::Error::new(
+                writer_spans.get(ext).copied().unwrap_or_else(Span::call_site),
+                format!(
+                    "variable '{ext}' is declared as an external input via `external = \"...\"` \
+                     but is also written by stage '{writer}'; remove the external declaration or \
+                     the writer"
+                ),
+            ));
+        }
+    }
+
     // Check for missing inputs: read variables not produced by any stage or passed via args/context
     for (read_var, span) in &read_spans {
-        if input_unused.contains(read_var) {
-            continue; // user marked this as intentionally unused
+        if input_unused.contains(read_var) || external_inputs.contains(read_var) {
+            continue; // intentionally unused, or fed externally via `external = "..."`
         }
         let is_arg = constructor_args
             .iter()

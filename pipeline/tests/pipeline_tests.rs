@@ -396,3 +396,112 @@ fn test_multiple_rename() {
     assert_eq!(p.y, 5);
     assert_eq!(p.sum, 9);
 }
+
+// === Test: external field (`external = "..."`) ===
+// A field that no stage writes, fed by the caller between runs. It becomes a
+// `Default`-initialised `pub` member (not a `new()` parameter, unlike `args`),
+// is never reset by the pipeline, and is read by a stage that derives an output
+// from it. This mirrors the `leaves -> synthesize -> synths` shape.
+#[pipeline(name = "ExternalInputPipeline", error = "TestErr", external = "leaves")]
+mod external_input_mod {
+    use super::TestErr;
+    use pipeline::stage;
+    use pipeline::value::Vector;
+
+    #[stage]
+    pub fn synthesize(
+        leaves: &Vector<u32>,
+        synths: &mut Vector<u32>,
+    ) -> Result<(), TestErr> {
+        for i in 0..leaves.len() {
+            if let Some(v) = leaves.get_valid(i) {
+                synths.push_committed(*v * 10);
+            }
+        }
+        Ok(())
+    }
+
+    // Downstream consumer of the synthesized output, so `synths` is read.
+    #[stage]
+    pub fn total(
+        synths: &Vector<u32>,
+        #[unused]
+        #[skip_reset]
+        sum: &mut u32,
+    ) -> Result<(), TestErr> {
+        let mut s = 0;
+        for i in 0..synths.len() {
+            if let Some(v) = synths.get_valid(i) {
+                s += *v;
+            }
+        }
+        *sum = s;
+        Ok(())
+    }
+}
+
+#[test]
+fn test_external_field() {
+    // `leaves` is a Default-initialised public member (not a `new()` argument).
+    let mut p = ExternalInputPipeline::new();
+    assert_eq!(p.leaves.len(), 0);
+
+    // The caller populates the externally-fed field before running.
+    p.leaves.push_committed(1);
+    p.leaves.push_committed(2);
+    p.compute().expect("pipeline should run without error");
+    assert_eq!(p.synths.len(), 2);
+    assert_eq!(p.synths.get_valid(0).unwrap(), &10);
+    assert_eq!(p.synths.get_valid(1).unwrap(), &20);
+    assert_eq!(p.sum, 30);
+
+    // `leaves` is owned by the caller and never reset by the pipeline; it still
+    // holds exactly what was fed in.
+    assert_eq!(p.leaves.len(), 2);
+}
+
+// === Test: external field read by multiple stages ===
+// `external = "..."` is declared once in the header regardless of how many
+// stages read the field.
+#[pipeline(name = "HeaderExternalPipeline", error = "TestErr", external = "leaves")]
+mod header_external_mod {
+    use super::TestErr;
+    use pipeline::stage;
+    use pipeline::value::Vector;
+
+    // Neither stage marks `leaves`; it is declared external in the header.
+    #[stage]
+    pub fn count_a(
+        leaves: &Vector<u32>,
+        #[unused]
+        #[skip_reset]
+        n_a: &mut usize,
+    ) -> Result<(), TestErr> {
+        *n_a = leaves.len();
+        Ok(())
+    }
+
+    #[stage]
+    pub fn count_b(
+        leaves: &Vector<u32>,
+        #[unused]
+        #[skip_reset]
+        n_b: &mut usize,
+    ) -> Result<(), TestErr> {
+        *n_b = leaves.len();
+        Ok(())
+    }
+}
+
+#[test]
+fn test_header_external() {
+    let mut p = HeaderExternalPipeline::new();
+    assert_eq!(p.leaves.len(), 0);
+    p.leaves.push_committed(1);
+    p.leaves.push_committed(2);
+    p.leaves.push_committed(3);
+    p.compute().expect("pipeline should run without error");
+    assert_eq!(p.n_a, 3);
+    assert_eq!(p.n_b, 3);
+    assert_eq!(p.leaves.len(), 3);
+}
