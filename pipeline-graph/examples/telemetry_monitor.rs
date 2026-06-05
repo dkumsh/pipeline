@@ -218,7 +218,7 @@ mod telemetry_monitor {
 
         // Registered leaf-first / out of dependency order on purpose — `build()`
         // topologically sorts them, so execution order is derived, not declared.
-        g.add(
+        g.stage(
             "report",
             (Input(readings), Input(alerts), Input(fleet), Output(sink)),
             |readings: &Vector<Reading>,
@@ -248,14 +248,14 @@ mod telemetry_monitor {
         // `aggregate` before `detect`: when a critical fault breaks the cycle in
         // `detect`, the fleet rollup has already been produced.
         let src = if smoothing {
-            g.add("smooth", (Input(health), Output(ema)), smooth);
+            g.stage("smooth", (Input(health), Output(ema)), smooth);
             ema
         } else {
             health
         };
-        g.add("aggregate", (Input(src), Output(fleet)), aggregate);
-        g.add("detect", (Input(cfg), Input(src), Output(alerts)), detect);
-        g.add(
+        g.stage("aggregate", (Input(src), Output(fleet)), aggregate);
+        g.stage("detect", (Input(cfg), Input(src), Output(alerts)), detect);
+        g.stage(
             "score",
             (Input(cfg), Input(readings), Output(health)),
             score,
@@ -299,11 +299,11 @@ mod telemetry_monitor {
     pub(crate) fn demo_build_rejects_bad_wiring() {
         let mut g = Graph::new();
         let x = g.slot::<Value<u32>>("x");
-        g.add("a", (Output(x),), |v: &mut Value<u32>| {
+        g.stage("a", (Output(x),), |v: &mut Value<u32>| {
             v.set(1);
             Ok(Flow::Continue)
         });
-        g.add("b", (Output(x),), |v: &mut Value<u32>| {
+        g.stage("b", (Output(x),), |v: &mut Value<u32>| {
             v.set(2);
             Ok(Flow::Continue)
         });

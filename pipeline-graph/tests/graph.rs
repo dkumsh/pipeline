@@ -10,7 +10,7 @@ fn basic_dataflow_and_reset() {
     let sum = g.slot::<Value<u32>>("sum");
     g.external(leaves);
 
-    g.add(
+    g.stage(
         "synthesize",
         (Input(leaves), Output(synths)),
         |l: &Vector<u32>, s: &mut Vector<u32>| {
@@ -23,7 +23,7 @@ fn basic_dataflow_and_reset() {
         },
     );
 
-    g.add(
+    g.stage(
         "total",
         (Input(synths), Output(sum)),
         |s: &Vector<u32>, total: &mut Value<u32>| {
@@ -62,7 +62,7 @@ fn runtime_chosen_implementation_and_conditional_stage() {
 
         // Implementation chosen at runtime.
         if fast {
-            g.add(
+            g.stage(
                 "synthesize",
                 (Input(leaves), Output(synths)),
                 |l: &Vector<u32>, s: &mut Vector<u32>| {
@@ -75,7 +75,7 @@ fn runtime_chosen_implementation_and_conditional_stage() {
                 },
             );
         } else {
-            g.add(
+            g.stage(
                 "synthesize",
                 (Input(leaves), Output(synths)),
                 |l: &Vector<u32>, s: &mut Vector<u32>| {
@@ -91,12 +91,12 @@ fn runtime_chosen_implementation_and_conditional_stage() {
 
         // Stage conditionally added at runtime.
         if with_bonus {
-            g.add("bonus", (Output(sum),), |total: &mut Value<u32>| {
+            g.stage("bonus", (Output(sum),), |total: &mut Value<u32>| {
                 total.set(1000);
                 Ok(Flow::Continue)
             });
         } else {
-            g.add(
+            g.stage(
                 "total",
                 (Input(synths), Output(sum)),
                 |s: &Vector<u32>, total: &mut Value<u32>| {
@@ -128,7 +128,7 @@ fn topological_sort_reorders_stages() {
     let c = g.slot::<Value<u32>>("c");
 
     // Registered c, then b, then a — opposite of the data dependency.
-    g.add(
+    g.stage(
         "c",
         (Input(b), Output(c)),
         |b: &Value<u32>, c: &mut Value<u32>| {
@@ -136,7 +136,7 @@ fn topological_sort_reorders_stages() {
             Ok(Flow::Continue)
         },
     );
-    g.add(
+    g.stage(
         "b",
         (Input(a), Output(b)),
         |a: &Value<u32>, b: &mut Value<u32>| {
@@ -144,7 +144,7 @@ fn topological_sort_reorders_stages() {
             Ok(Flow::Continue)
         },
     );
-    g.add("a", (Output(a),), |a: &mut Value<u32>| {
+    g.stage("a", (Output(a),), |a: &mut Value<u32>| {
         a.set(2);
         Ok(Flow::Continue)
     });
@@ -160,11 +160,11 @@ fn topological_sort_reorders_stages() {
 fn rejects_multiple_writers() {
     let mut g = Graph::new();
     let x = g.slot::<Value<u32>>("x");
-    g.add("a", (Output(x),), |v: &mut Value<u32>| {
+    g.stage("a", (Output(x),), |v: &mut Value<u32>| {
         v.set(1);
         Ok(Flow::Continue)
     });
-    g.add("b", (Output(x),), |v: &mut Value<u32>| {
+    g.stage("b", (Output(x),), |v: &mut Value<u32>| {
         v.set(2);
         Ok(Flow::Continue)
     });
@@ -175,7 +175,7 @@ fn rejects_multiple_writers() {
 fn rejects_missing_producer() {
     let mut g = Graph::new();
     let x = g.slot::<Value<u32>>("x");
-    g.add("reader", (Input(x),), |_v: &Value<u32>| Ok(Flow::Continue));
+    g.stage("reader", (Input(x),), |_v: &Value<u32>| Ok(Flow::Continue));
     assert!(matches!(g.build(), Err(GraphError::MissingProducer { .. })));
 }
 
@@ -185,7 +185,7 @@ fn rejects_cycle() {
     let x = g.slot::<Value<u32>>("x");
     let y = g.slot::<Value<u32>>("y");
     // a: reads y, writes x ; b: reads x, writes y  -> cycle
-    g.add(
+    g.stage(
         "a",
         (Input(y), Output(x)),
         |_y: &Value<u32>, x: &mut Value<u32>| {
@@ -193,7 +193,7 @@ fn rejects_cycle() {
             Ok(Flow::Continue)
         },
     );
-    g.add(
+    g.stage(
         "b",
         (Input(x), Output(y)),
         |_x: &Value<u32>, y: &mut Value<u32>| {

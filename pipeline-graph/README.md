@@ -28,14 +28,14 @@ let total  = g.slot::<Value<u32>>("total");
 g.external(leaves); // caller-fed; its dirty flags are cleared each cycle
 
 // Stages take their ports as separate args — like a static `#[stage]`.
-g.add("synthesize", (Input(leaves), Output(synths)),
+g.stage("synthesize", (Input(leaves), Output(synths)),
     |l: &Vector<u32>, s: &mut Vector<u32>| {
         for i in 0..l.len() {
             if let Some(v) = l.get_valid(i) { s.push_committed(*v * 10); }
         }
         Ok(Flow::Continue)
     });
-g.add("sum", (Input(synths), Output(total)),
+g.stage("sum", (Input(synths), Output(total)),
     |s: &Vector<u32>, t: &mut Value<u32>| {
         t.set(s.as_slice().iter().sum());
         Ok(Flow::Continue)

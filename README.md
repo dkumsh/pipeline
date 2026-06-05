@@ -55,7 +55,7 @@ let mut g = Graph::new();
 let xs  = g.slot::<Vector<u32>>("xs");
 let sum = g.slot::<Value<u32>>("sum");
 g.external(xs);
-g.add("sum", (Input(xs), Output(sum)),
+g.stage("sum", (Input(xs), Output(sum)),
     |xs: &Vector<u32>, s: &mut Value<u32>| { s.set(xs.as_slice().iter().sum()); Ok(Flow::Continue) });
 let mut p = g.build().unwrap();
 ```

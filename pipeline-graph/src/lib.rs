@@ -22,6 +22,7 @@
 //! The only type erasure lives in the node store (a raw pointer plus a drop and
 //! a reset function pointer captured where the concrete type is known); it never
 //! appears on the typed access path.
+#![warn(missing_docs)]
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
@@ -144,7 +145,9 @@ impl Store {
 /// Access kind of a port.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Access {
+    /// The stage reads the node (`&T`).
     Input,
+    /// The stage writes the node (`&mut T`).
     Output,
 }
 
@@ -157,9 +160,15 @@ pub struct Output<T>(pub Slot<T>);
 
 /// A single declared port. Implemented for [`Input`] and [`Output`].
 pub trait Port {
+    /// The reference handed to the stage body: `&T` for [`Input`], `&mut T` for
+    /// [`Output`].
     type Ref<'a>;
+    /// Id of the node this port addresses.
     fn id(&self) -> u32;
+    /// Whether this port reads or writes the node.
     fn access(&self) -> Access;
+    /// Fetch the typed reference for this port from the store.
+    ///
     /// # Safety
     /// The engine must uphold the access discipline proven by `build()`.
     unsafe fn fetch<'a>(&self, store: &'a Store) -> Self::Ref<'a>;
@@ -194,8 +203,12 @@ impl<T: 'static> Port for Output<T> {
 /// A stage's full port list. Implemented for tuples of [`Port`] (arity 1..=6).
 /// `Refs<'a>` is the matching tuple of `&T` / `&mut T` handed to the stage body.
 pub trait Ports {
+    /// The tuple of references (`&T` / `&mut T`) handed to the stage body.
     type Refs<'a>;
+    /// The `(node id, access)` list, used for validation and topological sort.
     fn metadata(&self) -> Vec<(u32, Access)>;
+    /// Fetch every port's reference from the store into the [`Self::Refs`] tuple.
+    ///
     /// # Safety
     /// See [`Port::fetch`].
     unsafe fn fetch<'a>(&self, store: &'a Store) -> Self::Refs<'a>;
@@ -226,13 +239,13 @@ impl_ports_tuple!(A, B, C, D, E);
 impl_ports_tuple!(A, B, C, D, E, F);
 
 /// Converts a stage body that takes its declared ports as **separate
-/// arguments** — exactly like a static `#[stage]` function — into a type-erased
-/// [`Runner`]. Implemented for `FnMut`s of arity 1..=6 (closures *and* free
-/// functions) whose argument types match the ports' reference types.
+/// arguments** — exactly like a static `#[stage]` function — into the engine's
+/// internal runner. Implemented for `FnMut`s of arity 1..=6 (closures *and*
+/// free functions) whose argument types match the ports' reference types.
 ///
 /// This is what lets you write `fn merge(cfg: &Config, synths: &Vector<_>,
 /// merged: &mut Vector<_>) -> Result<Flow, Error>` and pass it straight to
-/// [`Graph::add`].
+/// [`Graph::stage`].
 pub trait IntoStage<P: Ports> {
     #[doc(hidden)]
     fn into_runner(self, ports: P) -> Runner;
@@ -271,26 +284,39 @@ impl_into_stage!(A a, B b, C c, D d, E e, F f);
 /// Returned by a stage body to drive early-exit, mirroring `controlflow_break`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Flow {
+    /// Continue to the next stage in topological order.
     Continue,
+    /// Stop the cycle: skip the remaining stages (reset still runs).
     Break,
 }
 
 /// A wiring error detected at [`Graph::build`] time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GraphError {
+    /// A stage lists the same node more than once in its ports.
     DuplicateSlotInStage {
+        /// Name of the offending stage.
         stage: String,
+        /// Name of the duplicated node.
         slot: String,
     },
+    /// A node is written by more than one stage (single-writer violation).
     MultipleWriters {
+        /// Name of the multiply-written node.
         slot: String,
+        /// First stage found writing it.
         first: String,
+        /// Second stage found writing it.
         second: String,
     },
+    /// A node is read but produced by no stage and not declared external/arg.
     MissingProducer {
+        /// Name of the unproduced node.
         slot: String,
+        /// A stage that reads it.
         reader: String,
     },
+    /// The stage graph contains a cycle (no valid topological order).
     Cycle,
 }
 
@@ -344,6 +370,7 @@ impl Default for Graph {
 }
 
 impl Graph {
+    /// Create an empty graph builder.
     pub fn new() -> Self {
         Graph {
             store: Store { nodes: Vec::new() },
@@ -410,7 +437,7 @@ impl Graph {
     /// Register a stage. `ports` is a tuple of `Input`/`Output`; `body` is a
     /// closure or free function taking the matching references as **separate
     /// arguments** (like a static `#[stage]`), chosen at runtime.
-    pub fn add<P, S>(&mut self, name: &str, ports: P, body: S)
+    pub fn stage<P, S>(&mut self, name: &str, ports: P, body: S)
     where
         P: Ports + 'static,
         S: IntoStage<P>,

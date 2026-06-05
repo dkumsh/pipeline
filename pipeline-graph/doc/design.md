@@ -126,7 +126,7 @@ Output(health))`. Implemented for tuples of arity 1..=6. Provides `metadata()`
 
 ### Stage / `IntoStage` — the function nodes
 
-A stage is registered with `Graph::add(name, ports, body)`. The `body` is a
+A stage is registered with `Graph::stage(name, ports, body)`. The `body` is a
 closure or free function that takes the port references as **separate
 arguments** (like a static `#[stage]`): `fn score(cfg: &Config, readings:
 &Vector<Reading>, health: &mut Vector<Health>) -> Result<Flow, Error>`. The
@@ -136,7 +136,7 @@ the engine's internal `Runner`.
 ### `Graph` → `Pipeline`
 
 - **`Graph`** — the runtime builder. `slot`/`arg`/`external` declare data nodes;
-  `add` registers stages. `build()` validates and produces a `Pipeline`.
+  `stage` registers stages. `build()` validates and produces a `Pipeline`.
 - **`Pipeline`** — a validated, executable graph. `compute()` runs one cycle;
   `get`/`get_mut`/`set` feed inputs and inspect outputs between cycles; `dot()`
   emits the live graph as Graphviz.
@@ -167,7 +167,7 @@ Store              owns Vec<DataNode>; each DataNode owns one boxed T
 
 1. **Declare nodes.** `g.slot::<T>(name)` (internal), `g.arg(name, value)`
    (constant), `g.external(slot)` (caller-fed). Each allocates a `DataNode`.
-2. **Register stages.** `g.add(name, ports, body)` records the port metadata and
+2. **Register stages.** `g.stage(name, ports, body)` records the port metadata and
    a type-erased runner. Registration order does not matter (see [D5](#d5)).
 3. **`build()`** runs four checks and topologically sorts (see [D3](#d3)),
    returning `Result<Pipeline, GraphError>`.
