@@ -12,7 +12,7 @@ is decided**:
 |---|---|---|---|
 | **[`pipeline-core`](pipeline-core)** | `pipeline` | the value layer: `Value` / `Vector` / `Buckets` + `Reset` | always (both front-ends build on it) |
 | **[`pipeline-dsl`](pipeline-dsl)** | `pipeline_dsl` | **static** front-end — `#[pipeline]`/`#[stage]` macros derive the graph from function signatures | the graph is fixed and known at compile time |
-| **[`pipeline-graph`](pipeline_graph)** | `pipeline_graph` | **dynamic** front-end — assemble the graph at runtime (`Graph`, `Input`/`Output`) | which stages/implementations/wiring exist is decided at runtime |
+| **[`pipeline-graph`](pipeline-graph)** | `pipeline_graph` | **dynamic** front-end — assemble the graph at runtime (`Graph`, `Input`/`Output`) | which stages/implementations/wiring exist is decided at runtime |
 | [`pipeline-macros`](pipeline-macros) | — | internal proc-macro crate behind `pipeline-dsl` | (don't depend on directly) |
 
 Both front-ends depend on `pipeline-core` and refer to the value types by one
@@ -24,7 +24,7 @@ canonical name, `pipeline::Vector`, `pipeline::Value`, etc.
   [`pipeline-dsl`](pipeline-dsl). The macro enforces single-writer, missing-producer,
   and ordering as *compile errors*.
 - **Runtime graph — choose stages, implementations, or wiring dynamically** →
-  [`pipeline-graph`](pipeline_graph). The same rules are enforced by `build()` at
+  [`pipeline-graph`](pipeline-graph). The same rules are enforced by `build()` at
   startup; supports runtime reconfiguration and a live `dot()` diagram.
 
 Both share `pipeline-core`'s dirty/validity-tracking values, so the

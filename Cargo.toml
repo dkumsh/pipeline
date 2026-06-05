@@ -11,7 +11,7 @@ version = "0.3.4"
 [workspace]
 resolver = "2"
 
-members = ["pipeline-core", "pipeline-macros", "pipeline-dsl", "pipeline_example", "pipeline_graph"]
+members = ["pipeline-core", "pipeline-macros", "pipeline-dsl", "pipeline-graph", "pipeline-example"]
 
 [workspace.dependencies]
 chrono = "0.4"

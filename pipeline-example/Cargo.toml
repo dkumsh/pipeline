@@ -1,5 +1,5 @@
 [package]
-name = "pipeline_example"
+name = "pipeline-example"
 authors.workspace = true
 license.workspace = true
 description.workspace = true
