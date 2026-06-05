@@ -7,6 +7,7 @@ edition.workspace = true
 description = "Core value layer (Value/Vector/Buckets) and Reset trait shared by the pipeline crates."
 repository.workspace = true
 keywords.workspace = true
+readme = "README.md"
 
 [dependencies]
 thiserror = { workspace = true }

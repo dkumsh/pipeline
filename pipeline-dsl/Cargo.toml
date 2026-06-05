@@ -7,6 +7,7 @@ edition.workspace = true
 description = "Static #[pipeline]/#[stage] DSL over the pipeline-core value layer."
 repository.workspace = true
 keywords.workspace = true
+readme = "README.md"
 
 [dependencies]
 pipeline-core = { path = "../pipeline-core" }
