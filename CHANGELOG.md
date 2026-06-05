@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-06
+
+### Added
+
+- **`pipeline-graph`** — a new crate: a dynamic, runtime-wired counterpart to the
+  static `#[pipeline]` macro. Assemble the dataflow graph at runtime (`Graph`,
+  typed `Slot<T>` handles, `Input`/`Output` ports, `stage`), with the same wiring
+  rules enforced at `build()` (single-writer, missing-producer, disjointness,
+  acyclicity) and the same `pipeline-core` value layer. Type-erased node store
+  with a small encapsulated `unsafe` core, validated under Miri (`just miri`).
+  Includes a `telemetry_monitor` example and `doc/design.md`.
+
 ### Changed (breaking — workspace restructure)
 
 - Split into a layered set of crates over a shared value layer:

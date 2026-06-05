@@ -30,6 +30,16 @@ test:
 miri:
     cargo +nightly miri test -p pipeline-graph
 
+# Publish all crates to crates.io. Uses workspace publish (cargo >= 1.90), which
+# resolves the interdependencies locally, verifies each crate, uploads them in
+# dependency order, and waits for the index to propagate between dependents — so
+# no manual ordering or sleeps are needed. `pipeline-example` is publish=false
+# and is skipped automatically. Requires a clean git tree and `cargo login`.
+#   just publish              # real publish
+#   just publish --dry-run    # full dry-run: package + verify every crate, no upload
+publish dry="":
+    cargo publish --workspace {{dry}}
+
 # execute benchmarks
 bench:
     cargo bench

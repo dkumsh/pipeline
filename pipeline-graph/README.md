@@ -62,6 +62,23 @@ assert_eq!(p.get(total).get_valid(), Some(&60));
 See `examples/telemetry_monitor.rs` for a complete worked example and
 `doc/design.md` for concepts, design decisions, and the type-erasure chapter.
 
+## Safety
+
+The two front-ends are **not** equivalent on safety, and the difference is
+deliberate:
+
+- [`pipeline-dsl`] (static) is **fully checked at compile time** and contains no
+  `unsafe`. Mis-wiring is a compile error.
+- `pipeline-graph` (dynamic) trades that for runtime flexibility. Wiring is
+  validated at `build()` (single-writer, missing-producer, disjointness,
+  acyclicity) rather than by the compiler, and the type-erased node store uses a
+  **small, encapsulated `unsafe` core**. Its soundness rests on a compile-time
+  slot-type invariant plus the `build()` validation, and is exercised under
+  Miri (`just miri`). Your *stage code* is ordinary safe Rust.
+
+If a fixed, compile-time graph fits your problem, prefer the static front-end —
+you get stronger guarantees for free.
+
 ## Related crates
 
 Part of the **pipeline** family — a shared value layer with two front-ends:

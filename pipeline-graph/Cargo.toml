@@ -6,7 +6,8 @@ license.workspace = true
 edition.workspace = true
 description = "Dynamic (runtime-wired) pipeline graph over the pipeline-core value layer."
 repository.workspace = true
+keywords.workspace = true
 readme = "README.md"
 
 [dependencies]
-pipeline-core = { path = "../pipeline-core" }
+pipeline-core = { path = "../pipeline-core", version = "0.4" }

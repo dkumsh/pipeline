@@ -30,6 +30,13 @@ canonical name, `pipeline::Vector`, `pipeline::Value`, etc.
 Both share `pipeline-core`'s dirty/validity-tracking values, so the
 "recompute only what changed" model works identically in either.
 
+**Safety asymmetry (deliberate):** the static front-end is fully compile-time
+checked and contains no `unsafe`. The dynamic front-end trades that for runtime
+flexibility — wiring is validated at `build()` instead of by the compiler, and
+its type-erased store has a small encapsulated `unsafe` core (checked under
+Miri). Stage code is safe Rust either way. Prefer the static front-end when a
+fixed, compile-time graph fits.
+
 ## Quick taste
 
 Static (`pipeline-dsl`):

@@ -10,8 +10,8 @@ keywords.workspace = true
 readme = "README.md"
 
 [dependencies]
-pipeline-core = { path = "../pipeline-core" }
-pipeline-macros = { path = "../pipeline-macros" }
+pipeline-core = { path = "../pipeline-core", version = "0.4" }
+pipeline-macros = { path = "../pipeline-macros", version = "0.4" }
 
 [dev-dependencies]
 thiserror = { workspace = true }

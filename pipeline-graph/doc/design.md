@@ -275,6 +275,13 @@ missing-producer, topological order, per-cycle reset, early-exit.
 **Traded:** wiring errors surface at startup (not compile time); a small,
 encapsulated core of `unsafe` replaces compile-time-checked field access.
 
+> **Safety asymmetry.** This is the one place the two front-ends genuinely
+> differ, and it's intentional: `pipeline-dsl` is fully compile-time checked
+> with no `unsafe`, whereas `pipeline-graph` moves wiring checks to `build()`
+> and carries a small `unsafe` store (validated under Miri — `just miri`). They
+> are *not* interchangeable on safety guarantees; pick the static front-end when
+> a compile-time graph fits the problem.
+
 ---
 
 ## 6. Limitations & future work

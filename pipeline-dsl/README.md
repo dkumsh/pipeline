@@ -66,6 +66,15 @@ references `pipeline::…` paths, so **a crate using the macro must depend on
 See the repository for the full guide (binding rules, multiple contexts,
 generics, diagrams, diagnostics).
 
+## Safety
+
+This front-end is **fully checked at compile time and uses no `unsafe`** —
+mis-wiring (a missing producer, two writers, a cycle) is a compile error. The
+dynamic [`pipeline-graph`] front-end trades those compile-time guarantees for
+runtime flexibility, validating wiring at `build()` and using a small
+encapsulated `unsafe` core. If a fixed graph fits your problem, this crate gives
+you the stronger guarantees.
+
 ## Related crates
 
 Part of the **pipeline** family — a shared value layer with two front-ends:
