@@ -1,0 +1,11 @@
+[package]
+name = "pipeline-graph"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+description = "Dynamic (runtime-wired) pipeline graph reusing the pipeline-dsl value layer."
+repository.workspace = true
+
+[dependencies]
+pipeline-dsl = { path = "../pipeline", version = "0.3" }
