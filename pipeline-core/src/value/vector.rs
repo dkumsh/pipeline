@@ -1,3 +1,11 @@
+//! `Vec`-like container with per-slot **dirty** and **validity** tracking.
+//!
+//! [`Vector<V>`] backs the pipeline's incremental, cycle-based recompute: each
+//! slot carries a validity bit (multi-cycle: "does this slot hold a value?")
+//! and a dirty bit (per-cycle: "was it written this cycle?", cleared by
+//! [`Reset`]). Producers `commit`/`update`/`push` slots; consumers read via
+//! `get_valid` and iterate only what changed via `iter_updated_*`.
+
 use crate::Error;
 use crate::Reset;
 use std::vec::Vec;

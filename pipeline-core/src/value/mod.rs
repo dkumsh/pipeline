@@ -1,3 +1,6 @@
+//! Single-value cell ([`Value`]) with dirty/validity tracking, plus the
+//! [`Vector`] and [`Buckets`] containers.
+
 use crate::{Error, Reset};
 
 pub mod buckets;
@@ -5,30 +8,42 @@ pub mod vector;
 pub use buckets::Buckets;
 pub use vector::Vector;
 
+/// The state of a [`Value`] cell.
+///
+/// `Updated` is set on write and demoted to `Value` by [`Reset`] (so "updated
+/// this cycle" is distinct from "holds a value"); `Uninitialised` holds nothing.
 #[derive(Default, Debug, PartialEq)]
 pub enum State<T> {
+    /// No value held (or explicitly invalidated).
     #[default]
     Uninitialised,
+    /// Holds a value that was not written this cycle.
     Value(T),
+    /// Holds a value written this cycle (dirty).
     Updated(T),
 }
 
+/// A single dirty/validity-tracked value — the scalar analogue of one
+/// [`Vector`] slot.
 #[derive(Default)]
 pub struct Value<T> {
     state: State<T>,
 }
 
 impl<T> Value<T> {
+    /// Create an empty (`Uninitialised`) cell.
     pub fn new() -> Self {
         Value {
             state: State::Uninitialised,
         }
     }
 
+    /// Store `value` and mark the cell updated (dirty) this cycle.
     pub fn set(&mut self, value: T) {
         self.state = State::Updated(value);
     }
 
+    /// Borrow the value, or `Err(UninitialisedValue)` if there is none.
     pub fn get(&self) -> Result<&T, Error> {
         match &self.state {
             State::Value(v) | State::Updated(v) => Ok(v),
@@ -36,6 +51,7 @@ impl<T> Value<T> {
         }
     }
 
+    /// Mutably borrow the value, or `Err(UninitialisedValue)` if there is none.
     pub fn get_mut(&mut self) -> Result<&mut T, Error> {
         match &mut self.state {
             State::Value(v) | State::Updated(v) => Ok(v),
@@ -43,6 +59,8 @@ impl<T> Value<T> {
         }
     }
 
+    /// Re-mark an existing value as updated (dirty) without changing it. No-op
+    /// if the cell is uninitialised or already updated.
     pub fn touch(&mut self) {
         if let State::Value(_) = self.state
             && let State::Value(v) = std::mem::replace(&mut self.state, State::Uninitialised)
@@ -51,10 +69,12 @@ impl<T> Value<T> {
         }
     }
 
+    /// Whether the value was written this cycle (state is `Updated`).
     pub fn is_updated(&self) -> bool {
         matches!(self.state, State::Updated(_))
     }
 
+    /// Whether the cell currently holds a value (`Value` or `Updated`).
     pub fn has_value(&self) -> bool {
         !matches!(self.state, State::Uninitialised)
     }
