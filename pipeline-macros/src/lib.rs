@@ -1,6 +1,5 @@
 extern crate proc_macro;
 use proc_macro::TokenStream;
-use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 
@@ -19,10 +18,12 @@ const HTML_TEMPLATE: &str = include_str!(concat!(
 
 #[proc_macro_attribute]
 pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let main_crate_ident = match crate_name("pipeline") {
-        Ok(FoundCrate::Itself) => format_ident!("crate"), // when expanding inside pipeline-dsl itself
-        _ => format_ident!("pipeline"),                   // everywhere else (tests, external users)
-    };
+    // Generated code references the value layer (`pipeline-core`) by its lib
+    // name `pipeline` — fixed by that crate's `[lib] name`, so we emit it
+    // literally. (`proc_macro_crate` can't be used here: it resolves the
+    // package name `pipeline_core`, not the overridden lib name.) A crate using
+    // `#[pipeline]` must depend on `pipeline-core` directly.
+    let main_crate_ident = format_ident!("pipeline");
     // Parse the attribute arguments and the module item
     let attr_args = parse_macro_input!(attr as PipelineArgs);
     let mut module = parse_macro_input!(item as ItemMod);

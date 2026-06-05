@@ -32,8 +32,8 @@
 //! * `dot()` — the live graph as a Graphviz diagram;
 //! * **build-time validation** — a deliberately bad graph is rejected.
 
-use pipeline::Error;
-use pipeline_graph::{Flow, Graph, Input, Output, Pipeline, Slot, Value, Vector};
+use pipeline::{Error, Value, Vector};
+use pipeline_graph::{Flow, Graph, Input, Output, Pipeline, Slot};
 
 // --------------------------------------------------------------------------
 // Domain types

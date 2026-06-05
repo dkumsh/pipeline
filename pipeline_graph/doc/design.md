@@ -215,7 +215,7 @@ reference fetch is a plain pointer reborrow with no runtime borrow check.
 ### D4 — Reuse the value layer; node roles drive reset
 
 The crate does not reinvent values: it reuses `Value` / `Vector` / `Buckets` and
-the `Reset` trait from `pipeline-dsl` unchanged. `Reset` clears per-cycle
+the `Reset` trait from `pipeline-core` (imported as `pipeline`) unchanged. `Reset` clears per-cycle
 **dirty** state (not contents/validity). After each `compute()`, the engine
 resets every node that is `External` or has a writer; `Arg` nodes are never
 reset. This makes the dirty-driven incremental recompute pattern (recompute only

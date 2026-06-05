@@ -1,4 +1,5 @@
-use pipeline_graph::{Flow, Graph, GraphError, Input, Output, Value, Vector};
+use pipeline::{Value, Vector};
+use pipeline_graph::{Flow, Graph, GraphError, Input, Output};
 
 // leaves (external) -> synthesize -> synths -> total -> sum
 #[test]

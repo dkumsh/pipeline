@@ -6,8 +6,8 @@
 //! - Passing a mutable context parameter between stages.
 //! - Proper error propagation when a stage returns an error.
 
-use pipeline::pipeline;
 use pipeline::value::Vector;
+use pipeline_dsl::pipeline;
 
 use std::cell::RefCell;
 
@@ -40,7 +40,7 @@ impl From<pipeline::Error> for TestErr {
 #[pipeline(name = "RenamePipeline", error = "TestErr")]
 mod rename_mod {
     use super::TestErr;
-    use pipeline::stage;
+    use pipeline_dsl::stage;
     // no explicit imports needed in this module; macros are resolved via `pipeline` re-export
 
     // Stage initialising the renamed field.
@@ -81,7 +81,7 @@ fn test_rename_attribute() {
 #[pipeline(name = "OrderPipeline", error = "TestErr")]
 mod order_mod {
     use super::{CALLS, TestErr};
-    use pipeline::stage;
+    use pipeline_dsl::stage;
     // no explicit imports needed in this module; macros are resolved via `pipeline` re-export
 
     #[stage]
@@ -134,7 +134,7 @@ fn test_order_and_values() {
 #[pipeline(name = "ContextPipeline", context = "ctx", error = "TestErr")]
 mod ctx_mod {
     use super::TestErr;
-    use pipeline::stage;
+    use pipeline_dsl::stage;
     // no explicit imports needed in this module; macros are resolved via `pipeline` re-export
 
     #[stage]
@@ -166,7 +166,7 @@ fn test_context_param() {
 #[pipeline(name = "ErrorPipeline", error = "TestErr")]
 mod err_mod {
     use super::TestErr;
-    use pipeline::stage;
+    use pipeline_dsl::stage;
     // no explicit imports needed in this module; macros are resolved via `pipeline` re-export
 
     #[stage]
@@ -194,7 +194,7 @@ fn test_error_propagation() {
 #[pipeline(name = "ComplexPipeline", error = "TestErr")]
 mod complex_mod {
     use super::{CALLS, TestErr};
-    use pipeline::stage;
+    use pipeline_dsl::stage;
 
     #[stage]
     pub fn a(#[skip_reset] x: &mut u32) -> Result<(), TestErr> {
@@ -249,8 +249,8 @@ fn test_complex_order() {
 #[pipeline(name = "MixedPipeline", error = "TestErr")]
 mod mixed_mod {
     use super::TestErr;
-    use pipeline::stage;
     use pipeline::value::Vector;
+    use pipeline_dsl::stage;
 
     #[stage]
     pub fn generate(
@@ -297,7 +297,7 @@ fn test_skip_clear_behavior() {
 #[pipeline(name = "MultiProducerPipeline", error = "TestErr")]
 mod mp_mod {
     use super::{CALLS, TestErr};
-    use pipeline::stage;
+    use pipeline_dsl::stage;
 
     #[stage]
     pub fn produce_xy(
@@ -358,7 +358,7 @@ fn test_multi_producer() {
 #[pipeline(name = "RenameMultiPipeline", error = "TestErr")]
 mod ren_multi_mod {
     use super::TestErr;
-    use pipeline::stage;
+    use pipeline_dsl::stage;
 
     #[stage]
     pub fn init_fields(
@@ -405,8 +405,8 @@ fn test_multiple_rename() {
 #[pipeline(name = "ExternalInputPipeline", error = "TestErr", external = "leaves")]
 mod external_input_mod {
     use super::TestErr;
-    use pipeline::stage;
     use pipeline::value::Vector;
+    use pipeline_dsl::stage;
 
     #[stage]
     pub fn synthesize(leaves: &Vector<u32>, synths: &mut Vector<u32>) -> Result<(), TestErr> {
@@ -475,8 +475,8 @@ fn test_external_field() {
 )]
 mod header_external_mod {
     use super::TestErr;
-    use pipeline::stage;
     use pipeline::value::Vector;
+    use pipeline_dsl::stage;
 
     // Neither stage marks `leaves`; it is declared external in the header.
     #[stage]

@@ -1,0 +1,20 @@
+[package]
+name = "pipeline-dsl"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+description = "Static #[pipeline]/#[stage] DSL over the pipeline-core value layer."
+repository.workspace = true
+keywords.workspace = true
+
+[dependencies]
+pipeline-core = { path = "../pipeline-core" }
+pipeline-macros = { path = "../pipeline-macros" }
+
+[dev-dependencies]
+thiserror = { workspace = true }
+
+[lib]
+name = "pipeline_dsl"
+crate-type = ["rlib"]

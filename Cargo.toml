@@ -11,7 +11,7 @@ version = "0.3.4"
 [workspace]
 resolver = "2"
 
-members = ["pipeline", "pipeline_derive", "pipeline_example", "pipeline_graph"]
+members = ["pipeline-core", "pipeline-macros", "pipeline-dsl", "pipeline_example", "pipeline_graph"]
 
 [workspace.dependencies]
 chrono = "0.4"
@@ -19,7 +19,3 @@ syn = { version = "2.0", features = ["full", "extra-traits"] }
 quote = "1.0"
 proc-macro2 = "1.0"
 thiserror = "2.0"
-
-[patch.crates-io]
-pipeline-dsl = { path = "pipeline" }
-pipeline-dsl-macros = { path = "pipeline_derive" }

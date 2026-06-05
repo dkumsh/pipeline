@@ -18,7 +18,7 @@
 //!   cycle 2 -> [Some(20), Some(40), None]
 
 use pipeline::value::vector::Vector;
-use pipeline::{pipeline, stage};
+use pipeline_dsl::{pipeline, stage};
 
 #[derive(Default)]
 struct Tick {

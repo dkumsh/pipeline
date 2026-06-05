@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (breaking — workspace restructure)
+
+- Split into a layered set of crates over a shared value layer:
+  - **`pipeline-core`** (lib `pipeline`) — the value layer (`Value`/`Vector`/
+    `Buckets`) and `Reset`/`Error`. Now also root-re-exports the value types, so
+    `pipeline::Vector` works alongside `pipeline::value::Vector`.
+  - **`pipeline-macros`** — the `#[pipeline]`/`#[stage]` proc macros (renamed
+    from `pipeline-dsl-macros`).
+  - **`pipeline-dsl`** (lib `pipeline_dsl`) — the static front-end; now just
+    re-exports the macros. **Macros import moves: `use pipeline::{pipeline,
+    stage}` → `use pipeline_dsl::{pipeline, stage}`.** Value types still come
+    from `pipeline` (`pipeline-core`), which a `#[pipeline]` user must depend on
+    directly.
+  - **`pipeline-graph`** (lib `pipeline_graph`) — the dynamic front-end; now
+    depends only on `pipeline-core` (no macros pulled in) and no longer
+    re-exports value types (use `pipeline::{Value, Vector}`).
+
 ## [0.3.4] - 2026-06-04
 
 ### Added

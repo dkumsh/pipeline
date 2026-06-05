@@ -4,7 +4,7 @@
 //!
 //! Run: `cargo run --example moving_average`
 
-use pipeline::{pipeline, stage};
+use pipeline_dsl::{pipeline, stage};
 
 #[derive(Default, Debug)]
 struct Series {

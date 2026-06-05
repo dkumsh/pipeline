@@ -1,17 +1,15 @@
 [package]
-name = "pipeline-dsl"
+name = "pipeline-core"
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-description = "Pipeline DSL types and re-exports of #[pipeline]/#[stage]."
+description = "Core value layer (Value/Vector/Buckets) and Reset trait shared by the pipeline crates."
 repository.workspace = true
 keywords.workspace = true
 
 [dependencies]
-chrono = { workspace = true }
 thiserror = { workspace = true }
-pipeline-dsl-macros = { path = "../pipeline_derive", version="0.3.0"}
 
 [lib]
 name = "pipeline"

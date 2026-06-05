@@ -28,7 +28,6 @@ use std::collections::{BinaryHeap, HashSet};
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
-pub use pipeline::value::{Buckets, Value, Vector};
 use pipeline::{Error, Reset};
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 use pipeline::value::Vector;
-use pipeline::{pipeline, stage};
+use pipeline_dsl::{pipeline, stage};
 use thiserror::Error;
 
 /// Custom error type that converts pipeline::Error via `From`
@@ -26,7 +26,7 @@ pub mod example {
         Ok(())
     }
 
-    #[pipeline::stage]
+    #[pipeline_dsl::stage]
     pub fn print_foo(config: &Config, foo: &Vector<Foo>) -> Result<(), AppError> {
         // read foo here...
         Ok(())

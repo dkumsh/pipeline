@@ -1,5 +1,5 @@
 use pipeline::value::Vector;
-use pipeline::{pipeline, stage};
+use pipeline_dsl::{pipeline, stage};
 use std::fs;
 
 #[derive(Debug, thiserror::Error)]

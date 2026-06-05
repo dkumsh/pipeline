@@ -1,5 +1,5 @@
 //! ControlFlow integration tests for the #[pipeline] macro.
-use pipeline::{pipeline, stage};
+use pipeline_dsl::{pipeline, stage};
 use std::ops::ControlFlow;
 
 /// A tiny helper we can mutate and then detect whether `reset_all()`

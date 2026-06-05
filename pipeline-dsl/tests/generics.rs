@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use pipeline::{pipeline, stage};
+use pipeline_dsl::{pipeline, stage};
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 struct Db<T> {

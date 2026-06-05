@@ -3,7 +3,7 @@
 //!
 //! Run: `cargo run --example early_break`
 
-use pipeline::{pipeline, stage};
+use pipeline_dsl::{pipeline, stage};
 
 #[derive(Default, Debug)]
 struct State {

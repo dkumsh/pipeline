@@ -1,4 +1,4 @@
-use pipeline::*;
+use pipeline_dsl::*;
 
 // Simple context types with counters
 #[derive(Default)]

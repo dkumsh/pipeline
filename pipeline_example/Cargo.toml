@@ -9,6 +9,7 @@ version.workspace = true
 
 [dependencies]
 chrono = { workspace = true }
-pipeline-dsl = { path = "../pipeline" }
+pipeline-core = { path = "../pipeline-core" }
+pipeline-dsl = { path = "../pipeline-dsl" }
 anyhow = "1.0.93"
 thiserror = "2.0.3"

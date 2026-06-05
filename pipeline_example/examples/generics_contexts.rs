@@ -3,7 +3,7 @@
 //!
 //! Run: `cargo run --example generics_contexts`
 
-use pipeline::{pipeline, stage};
+use pipeline_dsl::{pipeline, stage};
 
 #[derive(Default, Debug)]
 struct Db<T> {
