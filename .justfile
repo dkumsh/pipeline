@@ -26,6 +26,10 @@ build:
 test:
    cargo test
 
+# run Miri (undefined-behavior checks) over the dynamic graph's unsafe store
+miri:
+    cargo +nightly miri test -p pipeline-graph
+
 # execute benchmarks
 bench:
     cargo bench

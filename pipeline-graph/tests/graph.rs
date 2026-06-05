@@ -203,3 +203,94 @@ fn rejects_cycle() {
     );
     assert!(matches!(g.build(), Err(GraphError::Cycle)));
 }
+
+// ---------------------------------------------------------------------------
+// Adversarial tests — run under `cargo +nightly miri test` (`just miri`) to
+// stress the unsafe store's aliasing model on the hard cases the basic tests
+// don't reach: many simultaneous borrows, a panicking stage, and high arity.
+// ---------------------------------------------------------------------------
+
+// Maximum aliasing pressure in one stage: three live `&` references to distinct
+// nodes plus one live `&mut`, all conjured from the same `&Store` at once.
+#[test]
+fn many_disjoint_borrows_in_one_stage() {
+    let mut g = Graph::new();
+    let a = g.arg("a", 2u32);
+    let b = g.arg("b", 3u32);
+    let c = g.arg("c", 5u32);
+    let out = g.slot::<Value<u32>>("out");
+
+    g.stage(
+        "combine",
+        (Input(a), Input(b), Input(c), Output(out)),
+        |a: &u32, b: &u32, c: &u32, out: &mut Value<u32>| {
+            // a, b, c (&) and out (&mut) are all alive simultaneously here.
+            out.set(*a + *b + *c);
+            Ok(Flow::Continue)
+        },
+    );
+
+    let mut p = g.build().expect("valid graph");
+    p.compute().unwrap();
+    assert_eq!(p.get(out).get_valid(), Some(&10));
+}
+
+// A stage that panics mid-cycle must leave the store sound: unwinding drops the
+// in-flight `&mut`, the value written before the panic survives, and dropping
+// the pipeline frees every node exactly once (Miri verifies the drop glue).
+#[test]
+fn panicking_stage_leaves_store_sound() {
+    let mut g = Graph::new();
+    let x = g.slot::<Value<u32>>("x");
+    g.stage("boom", (Output(x),), |x: &mut Value<u32>| {
+        x.set(7);
+        panic!("stage failure") // `!` coerces to the Result return type
+    });
+    let mut p = g.build().expect("valid graph");
+
+    // Silence the panic backtrace this test deliberately triggers.
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| p.compute()));
+    std::panic::set_hook(prev);
+
+    assert!(
+        res.is_err(),
+        "the stage panic should unwind out of compute()"
+    );
+    assert_eq!(p.get(x).get_valid(), Some(&7)); // value written before the panic
+    // `p` drops here — Miri checks every node is dropped exactly once.
+}
+
+// High arity: exercise the arity-6 `Ports`/`IntoStage` impls (5 inputs + 1
+// output) that the other tests never reach.
+#[test]
+fn high_arity_stage() {
+    let mut g = Graph::new();
+    let a = g.arg("a", 1u32);
+    let b = g.arg("b", 2u32);
+    let c = g.arg("c", 3u32);
+    let d = g.arg("d", 4u32);
+    let e = g.arg("e", 5u32);
+    let out = g.slot::<Value<u32>>("out");
+
+    g.stage(
+        "sum6",
+        (
+            Input(a),
+            Input(b),
+            Input(c),
+            Input(d),
+            Input(e),
+            Output(out),
+        ),
+        |a: &u32, b: &u32, c: &u32, d: &u32, e: &u32, out: &mut Value<u32>| {
+            out.set(a + b + c + d + e);
+            Ok(Flow::Continue)
+        },
+    );
+
+    let mut p = g.build().expect("valid graph");
+    p.compute().unwrap();
+    assert_eq!(p.get(out).get_valid(), Some(&15));
+}
