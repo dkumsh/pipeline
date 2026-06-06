@@ -27,7 +27,7 @@
     }
     #layout {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+        grid-template-columns: minmax(0, 1fr) minmax(320px, 460px);
         flex: 1 1 auto;
         min-height: 0;
         width: 100%;
@@ -78,6 +78,13 @@
     }
     #controls {
         padding-top: 8px;
+        overflow: auto;
+    }
+    /* The vis configuration panel has wide fixed-width rows; let it shrink and
+       wrap/scroll inside the sidebar instead of being clipped. */
+    #controls .vis-configuration.vis-config-item {
+        max-width: 100%;
+        flex-wrap: wrap;
     }
     footer {
         flex: 0 0 auto;
@@ -136,24 +143,62 @@
         window.setTimeout(redrawNetwork, 220);
     }
 
-    var nodes = new vis.DataSet({{NODES_JSON}});
-    var edges = new vis.DataSet({{EDGES_JSON}});
+    var nodesArr = {{NODES_JSON}};
+    var edgesArr = {{EDGES_JSON}};
+
+    // Assign hierarchical levels by longest path from the sources, so every
+    // input node sits strictly left of the stage that consumes it. vis 4's
+    // "directed" sort alone misorders bipartite (data <-> stage) graphs.
+    (function assignLevels() {
+        var indeg = {}, adj = {}, level = {};
+        nodesArr.forEach(function (n) { indeg[n.id] = 0; adj[n.id] = []; level[n.id] = 0; });
+        edgesArr.forEach(function (e) {
+            if (adj[e.from] !== undefined && indeg[e.to] !== undefined) {
+                adj[e.from].push(e.to);
+                indeg[e.to] += 1;
+            }
+        });
+        var queue = nodesArr.filter(function (n) { return indeg[n.id] === 0; })
+                            .map(function (n) { return n.id; });
+        while (queue.length) {
+            var u = queue.shift();
+            adj[u].forEach(function (v) {
+                if (level[v] < level[u] + 1) { level[v] = level[u] + 1; }
+                indeg[v] -= 1;
+                if (indeg[v] === 0) { queue.push(v); }
+            });
+        }
+        nodesArr.forEach(function (n) { n.level = level[n.id]; });
+    })();
+
+    var nodes = new vis.DataSet(nodesArr);
+    var edges = new vis.DataSet(edgesArr);
 
     let container = document.getElementById('mynetwork');
     var controls = document.getElementById('controls');
     var options = {
         autoResize: true,
         locale: 'en',
-        edges: { arrows: { to: { enabled: true } }, smooth: { enabled: false } },
-        nodes: { font: { 'face': 'monospace', 'align': 'left' } },
+        edges: {
+            arrows: { to: { enabled: true } },
+            smooth: { enabled: true, type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.45 }
+        },
+        nodes: { font: { 'face': 'monospace', 'align': 'left' }, margin: 8 },
+        groups: {
+            stage: { shape: 'box', color: { background: '#cfe8cf', border: '#5a9e5a' } },
+            variable: { shape: 'ellipse', color: { background: '#cfe0f5', border: '#5588cc' } }
+        },
         layout: {
             "hierarchical": {
                 "enabled": true,
                 "sortMethod": "directed",
                 "direction": "LR",
-                levelSeparation: 275,
-                nodeSpacing: 70,
-                treeSpacing: 15
+                levelSeparation: 200,
+                nodeSpacing: 110,
+                treeSpacing: 40,
+                blockShifting: true,
+                edgeMinimization: true,
+                parentCentralization: true
             }
         },
         physics: { enabled: false },

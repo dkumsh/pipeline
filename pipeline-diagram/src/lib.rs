@@ -158,6 +158,7 @@ mod tests {
     fn missing_sections_default_to_empty() {
         let html = render_html(r#"{ "pipeline_name": "Empty" }"#).unwrap();
         assert!(html.contains("Pipeline: Empty"));
-        assert!(html.contains("new vis.DataSet([])"));
+        assert!(html.contains("var nodesArr = [];"));
+        assert!(html.contains("var edgesArr = [];"));
     }
 }
