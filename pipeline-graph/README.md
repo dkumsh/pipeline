@@ -60,9 +60,16 @@ assert_eq!(p.get(total).get_valid(), Some(&60));
   disjointness, and acyclicity, then topologically sorts (registration order
   doesn't matter).
 - **Per-cycle reset**, **`Flow::Break`** early-exit, **runtime reconfiguration**
-  (choose stages/implementations/wiring at runtime), and a `dot()` diagram.
+  (choose stages/implementations/wiring at runtime), `dot()`, and
+  interactive HTML diagrams.
 - **Optional graph name** via `Graph::named("...")`, carried into the built
   `Pipeline` for diagram/reporting APIs.
+
+```rust
+std::fs::create_dir_all("target/graph")?;
+let json = p.diagram_json();
+p.write_html_to_file("target/graph/runtime_graph.html")?;
+```
 
 See `examples/telemetry_monitor.rs` for a complete worked example and
 `doc/design.md` for concepts, design decisions, and the type-erasure chapter.

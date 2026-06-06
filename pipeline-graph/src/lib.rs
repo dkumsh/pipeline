@@ -30,6 +30,7 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use pipeline::{Error, Reset};
+use pipeline_diagram::{Edge, Group, Node};
 
 // Re-export the value layer so a single `pipeline-graph` dependency suffices
 // (`pipeline_graph::Vector`). The same types are available under the shared
@@ -625,4 +626,67 @@ impl Pipeline {
         s.push_str("}\n");
         s
     }
+
+    /// Render the live graph as an interactive HTML diagram.
+    pub fn html_diagram(&self) -> String {
+        pipeline_diagram::render_html(&self.diagram_json()).expect("runtime diagram JSON is valid")
+    }
+
+    /// Return the live graph as a `pipeline-diagram` graph JSON (stages + slots
+    /// as nodes, ports as edges). See `pipeline-diagram` for the shape.
+    pub fn diagram_json(&self) -> String {
+        let mut nodes = Vec::with_capacity(self.stages.len() + self.store.nodes.len());
+        for (ix, st) in self.stages.iter().enumerate() {
+            nodes.push(Node {
+                id: stage_diagram_id(ix),
+                label: st.name.clone(),
+                group: Group::Stage,
+                full_label: Some(format!("Stage: {}", st.name)),
+            });
+        }
+        for (id, node) in self.store.nodes.iter().enumerate() {
+            nodes.push(Node {
+                id: slot_diagram_id(id),
+                label: node.name.clone(),
+                group: Group::Variable,
+                full_label: Some(format!("Slot: {}", node.name)),
+            });
+        }
+
+        let mut edges = Vec::new();
+        for (ix, st) in self.stages.iter().enumerate() {
+            let stage_id = stage_diagram_id(ix);
+            for &(id, acc) in &st.ports {
+                let slot_id = slot_diagram_id(id as usize);
+                match acc {
+                    Access::Input => edges.push(Edge {
+                        from: slot_id,
+                        to: stage_id.clone(),
+                    }),
+                    Access::Output => edges.push(Edge {
+                        from: stage_id.clone(),
+                        to: slot_id,
+                    }),
+                }
+            }
+        }
+
+        pipeline_diagram::graph_json(&self.name, &nodes, &edges)
+    }
+
+    /// Write [`Pipeline::html_diagram`] to a file.
+    pub fn write_html_to_file<P: AsRef<std::path::Path>>(
+        &self,
+        file_path: P,
+    ) -> std::io::Result<()> {
+        std::fs::write(file_path, self.html_diagram())
+    }
+}
+
+fn stage_diagram_id(index: usize) -> String {
+    format!("stage:{index}")
+}
+
+fn slot_diagram_id(index: usize) -> String {
+    format!("slot:{index}")
 }

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `pipeline-graph` now exposes runtime HTML diagram generation via
+  `Pipeline::diagram_json()`, `Pipeline::html_diagram()`, and
+  `Pipeline::write_html_to_file(...)`.
+- Added `pipeline-diagram`, a shared HTML renderer used by both the static macro
+  front-end and the dynamic runtime graph front-end.
+
 ## [0.5.0] - 2026-06-06
 
 ### Changed (front-ends are now single-dependency)

@@ -1,0 +1,18 @@
+[package]
+name = "pipeline-diagram"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+description = "Shared HTML/JSON diagram renderer for the pipeline static and dynamic front-ends."
+repository.workspace = true
+keywords.workspace = true
+readme = "README.md"
+include = ["src/**", "assets/**", "Cargo.toml", "README.md"]
+
+[dependencies]
+serde_json = { workspace = true }
+
+[lib]
+name = "pipeline_diagram"
+crate-type = ["rlib"]

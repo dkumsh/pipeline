@@ -206,11 +206,14 @@ mod telemetry_monitor {
     pub(crate) fn build(config: Config, smoothing: bool) -> (Pipeline, Handles) {
         let n = config.n_machines;
 
-        let mut g = Graph::new();
+        let mut g = Graph::named(if smoothing {
+            "TelemetryMonitorSmoothing"
+        } else {
+            "TelemetryMonitor"
+        });
         let cfg = g.arg("config", config);
         let readings = g.slot::<Vector<Reading>>("readings");
         let health = g.slot::<Vector<Health>>("health");
-        let ema = g.slot::<Vector<Health>>("ema");
         let fleet = g.slot::<Value<FleetStats>>("fleet");
         let alerts = g.slot::<Vector<Severity>>("alerts");
         let sink = g.slot::<Value<Report>>("sink");
@@ -247,8 +250,13 @@ mod telemetry_monitor {
 
         // `aggregate` before `detect`: when a critical fault breaks the cycle in
         // `detect`, the fleet rollup has already been produced.
+        // The `ema` node only exists when smoothing is enabled — otherwise it
+        // would be an unwired, orphan node in the graph/diagram.
+        let mut ema_slot = None;
         let src = if smoothing {
+            let ema = g.slot::<Vector<Health>>("ema");
             g.stage("smooth", (Input(health), Output(ema)), smooth);
+            ema_slot = Some(ema);
             ema
         } else {
             health
@@ -265,7 +273,9 @@ mod telemetry_monitor {
         // Pre-size the dirty-tracked buffers; slots start invalid until committed.
         p.set(readings, Vector::with_invalid_slots(n));
         p.set(health, Vector::with_invalid_slots(n));
-        p.set(ema, Vector::with_invalid_slots(n));
+        if let Some(ema) = ema_slot {
+            p.set(ema, Vector::with_invalid_slots(n));
+        }
         p.set(alerts, Vector::with_invalid_slots(n));
         p.set(sink, {
             let mut v = Value::new();
@@ -315,9 +325,20 @@ mod telemetry_monitor {
 }
 
 fn main() {
+    std::fs::create_dir_all("target/graph").expect("create graph output dir");
+
     let (mut p, h) =
         telemetry_monitor::build(telemetry_monitor::config(4), /* smoothing */ false);
     println!("--- runtime graph (DOT) ---\n{}", p.dot());
+    let html_path = "target/graph/telemetry_monitor.html";
+    p.write_html_to_file(html_path)
+        .expect("write runtime graph html");
+    println!(
+        "HTML diagram written to: {}",
+        std::fs::canonicalize(html_path)
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| html_path.to_string())
+    );
 
     // ---- Cycle 1: machines 0,1,2 report (machine 3 stays silent) ----------
     p.get_mut(h.readings).commit(
@@ -389,6 +410,8 @@ fn main() {
     let (mut ps, hs) =
         telemetry_monitor::build(telemetry_monitor::config(4), /* smoothing */ true);
     println!("\n--- reconfigured with smoothing (DOT) ---\n{}", ps.dot());
+    ps.write_html_to_file("target/graph/telemetry_monitor_smoothing.html")
+        .expect("write smoothed runtime graph html");
     ps.get_mut(hs.readings).commit(
         0,
         Reading {

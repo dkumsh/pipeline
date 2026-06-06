@@ -141,7 +141,8 @@ the engine's internal `Runner`.
   registers stages. `build()` validates and produces a `Pipeline`.
 - **`Pipeline`** — a validated, executable graph. `compute()` runs one cycle;
   `get`/`get_mut`/`set` feed inputs and inspect outputs between cycles; `dot()`
-  emits the live graph as Graphviz.
+  emits Graphviz, `diagram_json()` emits the shared diagram spec, and
+  `html_diagram()` / `write_html_to_file()` emit the interactive HTML diagram.
 
 ### `Flow` — control flow
 
@@ -269,7 +270,7 @@ extension without changing the model.
 | Field/value types | struct fields | `DataNode` cells; typed via `Slot<T>` |
 | Direction | `&T` / `&mut T` in signatures | `Input` / `Output` ports |
 | Errors | compile errors | `GraphError` at `build()` |
-| Diagram | compile-time (PUML/HTML) | runtime `dot()` |
+| Diagram | compile-time (PUML/HTML) | runtime DOT/HTML |
 | Value layer | `Value`/`Vector`/`Buckets`/`Reset` | identical (reused) |
 
 **Preserved:** name/handle binding, direction-by-port, single-writer,

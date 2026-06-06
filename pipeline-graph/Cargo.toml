@@ -11,3 +11,4 @@ readme = "README.md"
 
 [dependencies]
 pipeline-core = { path = "../pipeline-core", version = "0.5" }
+pipeline-diagram = { path = "../pipeline-diagram", version = "0.5" }

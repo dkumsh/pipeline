@@ -14,6 +14,7 @@ is decided**:
 | **[`pipeline-dsl`](pipeline-dsl)** | `pipeline_dsl` | **static** front-end — `#[pipeline]`/`#[stage]` macros derive the graph from function signatures | the graph is fixed and known at compile time |
 | **[`pipeline-graph`](pipeline-graph)** | `pipeline_graph` | **dynamic** front-end — assemble the graph at runtime (`Graph`, `Input`/`Output`) | which stages/implementations/wiring exist is decided at runtime |
 | [`pipeline-macros`](pipeline-macros) | — | internal proc-macro crate behind `pipeline-dsl` | (don't depend on directly) |
+| [`pipeline-diagram`](pipeline-diagram) | — | shared HTML diagram renderer used by both front-ends | (don't depend on directly) |
 
 Each front-end **re-exports** the value layer, so you depend on just the one
 front-end crate (`pipeline_dsl::Vector` / `pipeline_graph::Vector`). If you also
@@ -27,7 +28,7 @@ shared `pipeline::Vector` name — they're the identical re-exported types.
   and ordering as *compile errors*.
 - **Runtime graph — choose stages, implementations, or wiring dynamically** →
   [`pipeline-graph`](pipeline-graph). The same rules are enforced by `build()` at
-  startup; supports runtime reconfiguration and a live `dot()` diagram.
+  startup; supports runtime reconfiguration and live DOT/HTML diagrams.
 
 Both share `pipeline-core`'s dirty/validity-tracking values, so the
 "recompute only what changed" model works identically in either.

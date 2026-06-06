@@ -15,6 +15,54 @@ fn graph_named_carries_name_to_pipeline() {
     assert_eq!(p.name(), "TelemetryMonitor");
 }
 
+#[test]
+fn html_diagram_renders_runtime_graph() {
+    let mut g = Graph::named("RuntimeDiagram");
+    let input = g.arg("input", 7u32);
+    let output = g.slot::<Value<u32>>("output");
+    g.stage(
+        "copy",
+        (Input(input), Output(output)),
+        |input: &u32, output: &mut Value<u32>| {
+            output.set(*input);
+            Ok(Flow::Continue)
+        },
+    );
+
+    let p = g.build().expect("valid graph");
+    let html = p.html_diagram();
+
+    assert!(html.contains("Pipeline: RuntimeDiagram"));
+    assert!(html.contains("sidebar-collapsed"));
+    assert!(html.contains("toggleSidebar"));
+    assert!(html.contains("network.setSize('100%', '100%')"));
+    assert!(html.contains("\"label\":\"copy\""));
+    assert!(html.contains("\"label\":\"input\""));
+    assert!(html.contains("\"label\":\"output\""));
+
+    let json = p.diagram_json();
+    assert!(json.contains("\"pipeline_name\":\"RuntimeDiagram\""));
+    assert!(json.contains("\"label\":\"copy\""));
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "does real filesystem I/O; Miri runs under isolation")]
+fn write_html_to_file_writes_runtime_graph() {
+    let p = Graph::named("FileDiagram")
+        .build()
+        .expect("empty graph is valid");
+    let path = std::env::temp_dir().join(format!(
+        "pipeline-graph-{}-diagram.html",
+        std::process::id()
+    ));
+
+    p.write_html_to_file(&path).expect("write html");
+    let html = std::fs::read_to_string(&path).expect("read html");
+    let _ = std::fs::remove_file(&path);
+
+    assert!(html.contains("Pipeline: FileDiagram"));
+}
+
 // leaves (external) -> synthesize -> synths -> total -> sum
 #[test]
 fn basic_dataflow_and_reset() {

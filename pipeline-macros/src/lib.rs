@@ -11,12 +11,6 @@ use syn::{
     parse_macro_input, parse_quote,
     spanned::Spanned,
 };
-// Compile the template into the derive crate binary:
-const HTML_TEMPLATE: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/assets/pipeline_graph.html"
-));
-
 #[proc_macro_attribute]
 pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Generated code references runtime support (`Reset`, the default `Error`)
@@ -92,8 +86,10 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Generate the PUML Diagram Content
     let puml_content = generate_puml(&stages, context_names);
 
-    // Generate the JSON for HTML diagram (nodes/edges only)
-    let (nodes_json, edges_json) = generate_html_data(&stages, context_names);
+    // Build the diagram spec JSON, then bake it + its HTML rendering.
+    let diagram_json = generate_diagram_json(&pipeline_name_str, &stages, context_names);
+    let html_diagram = pipeline_diagram::render_html(&diagram_json)
+        .expect("macro-generated diagram JSON is valid");
 
     // Generate the struct (context is not included)
     let struct_def = generate_struct(&pipeline_name, pipeline_generics, &fields, &pipeline_vars);
@@ -107,9 +103,8 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
         &compute_calls,
         &field_names,
         &puml_content,
-        &pipeline_name_str,
-        &nodes_json,
-        &edges_json,
+        &diagram_json,
+        &html_diagram,
         &context_params,
         &output_vars,
         &error_ty,
@@ -532,10 +527,9 @@ fn generate_impl(
     fields: &[(Ident, Type)],
     compute_calls: &[proc_macro2::TokenStream],
     field_names: &[Ident],
-    puml_content: &str,      // Receive the PUML content
-    pipeline_name_str: &str, // for HTML template
-    nodes_json: &str,
-    edges_json: &str,
+    puml_content: &str, // Receive the PUML content
+    diagram_json: &str, // pre-rendered diagram spec JSON
+    html_diagram: &str, // pre-rendered HTML page
     context_params: &[(Ident, Type)],
     output_vars: &HashSet<String>,
     error_ty: &Type,
@@ -595,12 +589,8 @@ fn generate_impl(
     // Convert PUML to literal
     let puml_literal = LitStr::new(puml_content, proc_macro2::Span::call_site());
 
-    let html_template_lit = LitStr::new(HTML_TEMPLATE, proc_macro2::Span::call_site());
-
-    // Precompute JSONs and pipeline name as literals to splice into generated code
-    let nodes_json_lit = LitStr::new(nodes_json, proc_macro2::Span::call_site());
-    let edges_json_lit = LitStr::new(edges_json, proc_macro2::Span::call_site());
-    let pipeline_name_lit = LitStr::new(pipeline_name_str, proc_macro2::Span::call_site());
+    let diagram_json_lit = LitStr::new(diagram_json, proc_macro2::Span::call_site());
+    let html_diagram_lit = LitStr::new(html_diagram, proc_macro2::Span::call_site());
 
     // Prepare compute method signature.  Multiple context parameters are supported.
     let compute_params = if !context_params.is_empty() {
@@ -642,11 +632,11 @@ fn generate_impl(
                 }
 
                 pub fn html_diagram() -> String {
-                    let template: &str = #html_template_lit;
-                    template
-                        .replace("{{PIPELINE_NAME}}", #pipeline_name_lit)
-                        .replace("{{NODES_JSON}}", #nodes_json_lit)
-                        .replace("{{EDGES_JSON}}", #edges_json_lit)
+                    #html_diagram_lit.to_string()
+                }
+
+                pub fn diagram_json() -> &'static str {
+                    #diagram_json_lit
                 }
 
                 pub fn write_html_to_file<P: AsRef<std::path::Path>>(
@@ -685,11 +675,11 @@ fn generate_impl(
                 }
 
                 pub fn html_diagram() -> String {
-                    let template: &str = #html_template_lit;
-                    template
-                        .replace("{{PIPELINE_NAME}}", #pipeline_name_lit)
-                        .replace("{{NODES_JSON}}", #nodes_json_lit)
-                        .replace("{{EDGES_JSON}}", #edges_json_lit)
+                    #html_diagram_lit.to_string()
+                }
+
+                pub fn diagram_json() -> &'static str {
+                    #diagram_json_lit
                 }
 
                 pub fn write_html_to_file<P: AsRef<std::path::Path>>(
@@ -1170,23 +1160,28 @@ fn generate_puml(stages: &[ItemFn], context_names: &[Ident]) -> String {
     puml
 }
 
-fn generate_html_data(stages: &[ItemFn], context_names: &[Ident]) -> (String, String) {
-    use serde_json::json;
+/// Build the `pipeline-diagram` JSON spec for a pipeline (see `pipeline-diagram`
+/// for the shape). The runtime graph builds the same shape independently.
+fn generate_diagram_json(
+    pipeline_name: &str,
+    stages: &[ItemFn],
+    context_names: &[Ident],
+) -> String {
+    use pipeline_diagram::{Edge, Group, Node};
     use std::collections::HashSet;
 
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
     let mut variables = HashSet::new();
-    let mut output_vars = HashSet::new();
 
     for stage in stages {
         let stage_name = stage.sig.ident.to_string();
-
-        nodes.push(json!({
-            "id": stage_name,
-            "label": stage_name,
-            "group": "stage"
-        }));
+        nodes.push(Node {
+            id: stage_name.clone(),
+            label: stage_name.clone(),
+            group: Group::Stage,
+            full_label: Some(format!("Stage: {stage_name}")),
+        });
 
         for input in &stage.sig.inputs {
             if let FnArg::Typed(PatType { attrs, pat, ty, .. }) = input
@@ -1197,33 +1192,35 @@ fn generate_html_data(stages: &[ItemFn], context_names: &[Ident]) -> (String, St
                 if context_names.iter().any(|name| name == &target_ident) {
                     continue;
                 }
-                let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
                 let var_name = target_ident.to_string();
-                let vis_var_name = format!("${}", var_name);
+                let vis_var_name = format!("${var_name}");
 
                 if variables.insert(var_name.clone()) {
-                    nodes.push(json!({
-                        "id": vis_var_name,
-                        "label": var_name,
-                        "group": "variable"
-                    }));
+                    nodes.push(Node {
+                        id: vis_var_name.clone(),
+                        label: var_name.clone(),
+                        group: Group::Variable,
+                        full_label: Some(format!("Variable: {var_name}")),
+                    });
                 }
 
                 let is_mut = matches!(&**ty, Type::Reference(syn::TypeReference { mutability, .. }) if mutability.is_some());
                 if is_mut {
-                    edges.push(json!({ "from": stage_name, "to": vis_var_name, "arrows": "to" }));
-                    output_vars.insert(var_name.clone());
+                    edges.push(Edge {
+                        from: stage_name.clone(),
+                        to: vis_var_name,
+                    });
                 } else {
-                    edges.push(json!({ "from": vis_var_name, "to": stage_name, "arrows": "to" }));
+                    edges.push(Edge {
+                        from: vis_var_name,
+                        to: stage_name.clone(),
+                    });
                 }
             }
         }
     }
 
-    (
-        serde_json::to_string(&nodes).unwrap(),
-        serde_json::to_string(&edges).unwrap(),
-    )
+    pipeline_diagram::graph_json(pipeline_name, &nodes, &edges)
 }
 
 #[proc_macro_attribute]

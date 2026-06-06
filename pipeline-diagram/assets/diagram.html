@@ -169,7 +169,7 @@
         var clickedNodes = nodes.get(ids);
         var control = document.getElementById("details");
         if (clickedNodes[0]) {
-            control.innerHTML = clickedNodes[0].fulllabel || clickedNodes[0].label;
+            control.innerHTML = clickedNodes[0].full_label || clickedNodes[0].label;
         } else {
             control.innerHTML = "<b>Pipeline</b>: {{PIPELINE_NAME}}";
         }
