@@ -13,6 +13,6 @@ readme = "README.md"
 exclude = ["doc/*.png"]
 
 [dependencies]
-pipeline-core = { path = "../pipeline-core", version = "0.5" }
-pipeline-diagram = { path = "../pipeline-diagram", version = "0.5" }
+pipeline-core = { workspace = true }
+pipeline-diagram = { workspace = true }
 chrono = { workspace = true }

@@ -5,15 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-06-06
 
 ### Added
 
+- Added `pipeline-diagram`, a shared, standalone HTML renderer (`render_html`,
+  plus an optional `graph_json` helper) used by both the static macro front-end
+  and the dynamic runtime graph front-end.
 - `pipeline-graph` now exposes runtime HTML diagram generation via
   `Pipeline::diagram_json()`, `Pipeline::html_diagram()`, and
   `Pipeline::write_html_to_file(...)`.
-- Added `pipeline-diagram`, a shared HTML renderer used by both the static macro
-  front-end and the dynamic runtime graph front-end.
+- The rendered diagram is interactive (vis-network 9: pan/zoom, click-for-detail,
+  a slide-out layout/physics controls pane) and records an optional
+  `metadata.generated_at` timestamp in its footer.
 
 ## [0.5.0] - 2026-06-06
 

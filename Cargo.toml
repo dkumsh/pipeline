@@ -6,7 +6,7 @@ readme = "README.md"
 keywords = ["pipeline", "dataflow", "dag", "macro", "workflow"]
 description = "Compile‑time pipeline DSL for structuring computations"
 edition = "2024"
-version = "0.5.0"
+version = "0.6.0"
 
 [workspace]
 resolver = "2"
@@ -21,6 +21,14 @@ members = [
 ]
 
 [workspace.dependencies]
+# Internal crates — the version requirement lives here only, so a release bump
+# is a single edit (plus [workspace.package] version above). Paths are relative
+# to the workspace root. pipeline-macros is exact-pinned: the macro's generated
+# paths are coupled to what pipeline-dsl re-exports, so the two move in lockstep.
+pipeline-core = { path = "pipeline-core", version = "0.6" }
+pipeline-diagram = { path = "pipeline-diagram", version = "0.6" }
+pipeline-macros = { path = "pipeline-macros", version = "=0.6.0" }
+
 chrono = "0.4"
 syn = { version = "2.0", features = ["full", "extra-traits"] }
 quote = "1.0"
