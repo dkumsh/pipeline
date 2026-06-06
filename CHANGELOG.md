@@ -27,14 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `pipeline::Vector` works alongside `pipeline::value::Vector`.
   - **`pipeline-macros`** — the `#[pipeline]`/`#[stage]` proc macros (renamed
     from `pipeline-dsl-macros`).
-  - **`pipeline-dsl`** (lib `pipeline_dsl`) — the static front-end; now just
-    re-exports the macros. **Macros import moves: `use pipeline::{pipeline,
-    stage}` → `use pipeline_dsl::{pipeline, stage}`.** Value types still come
-    from `pipeline` (`pipeline-core`), which a `#[pipeline]` user must depend on
-    directly.
-  - **`pipeline-graph`** (lib `pipeline_graph`) — the dynamic front-end; now
-    depends only on `pipeline-core` (no macros pulled in) and no longer
-    re-exports value types (use `pipeline::{Value, Vector}`).
+  - **`pipeline-dsl`** (lib `pipeline_dsl`) — the static front-end. **Macros
+    import moves: `use pipeline::{pipeline, stage}` → `use pipeline_dsl::{pipeline,
+    stage}`.** Self-contained: it re-exports the value layer, and the macro's
+    generated code resolves its runtime support through `pipeline-dsl`, so a
+    single `pipeline-dsl` dependency suffices (`pipeline_dsl::Vector`).
+  - **`pipeline-graph`** (lib `pipeline_graph`) — the dynamic front-end; depends
+    only on `pipeline-core` (no macros pulled in) and re-exports the value layer
+    (`pipeline_graph::Vector`), so it too is a single dependency.
+- Either front-end can be used alone. If you *also* depend on `pipeline-core`
+  directly, the value types are available under the shared `pipeline::` name
+  (`pipeline::Vector`) — the same re-exported types.
 
 ## [0.3.4] - 2026-06-04
 

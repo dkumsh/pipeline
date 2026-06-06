@@ -1,5 +1,6 @@
 extern crate proc_macro;
 use proc_macro::TokenStream;
+use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 
@@ -18,12 +19,18 @@ const HTML_TEMPLATE: &str = include_str!(concat!(
 
 #[proc_macro_attribute]
 pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
-    // Generated code references the value layer (`pipeline-core`) by its lib
-    // name `pipeline` — fixed by that crate's `[lib] name`, so we emit it
-    // literally. (`proc_macro_crate` can't be used here: it resolves the
-    // package name `pipeline_core`, not the overridden lib name.) A crate using
-    // `#[pipeline]` must depend on `pipeline-core` directly.
-    let main_crate_ident = format_ident!("pipeline");
+    // Generated code references runtime support (`Reset`, the default `Error`)
+    // through the `pipeline-dsl` front-end, which re-exports them. We resolve the
+    // caller's name for that crate so a dependency rename works; `crate_name`
+    // works correctly here because `pipeline-dsl`'s lib name equals its
+    // normalized package name (no lib-name override, unlike `pipeline-core`).
+    // Targeting the front-end (not `pipeline-core`) is what lets a `#[pipeline]`
+    // user depend on `pipeline-dsl` alone.
+    let main_crate_ident = match crate_name("pipeline-dsl") {
+        Ok(FoundCrate::Itself) => format_ident!("crate"),
+        Ok(FoundCrate::Name(name)) => format_ident!("{}", name),
+        Err(_) => format_ident!("pipeline_dsl"),
+    };
     // Parse the attribute arguments and the module item
     let attr_args = parse_macro_input!(attr as PipelineArgs);
     let mut module = parse_macro_input!(item as ItemMod);

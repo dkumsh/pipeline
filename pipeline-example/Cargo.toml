@@ -10,7 +10,7 @@ publish = false
 
 [dependencies]
 chrono = { workspace = true }
-pipeline-core = { path = "../pipeline-core" }
+# A single dependency — pipeline-dsl re-exports the value layer.
 pipeline-dsl = { path = "../pipeline-dsl" }
 anyhow = "1.0.93"
 thiserror = "2.0.3"

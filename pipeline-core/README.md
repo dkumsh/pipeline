@@ -5,10 +5,13 @@ family. This crate is imported as `pipeline` and provides the dirty- and
 validity-tracking value types plus the `Reset` trait the engines use to clear
 per-cycle state.
 
-You usually don't use this crate alone — you pair it with a front-end
+You usually don't depend on this crate directly — pick a front-end
 ([`pipeline-dsl`] for the static macro, or [`pipeline-graph`] for the dynamic
-runtime graph). But its types are the currency both speak, so you depend on it
-directly and refer to them as `pipeline::Vector`, `pipeline::Value`, etc.
+runtime graph); each **re-exports** these types, so a single front-end
+dependency is enough (`pipeline_dsl::Vector`, `pipeline_graph::Vector`). Depend
+on `pipeline-core` directly only if you want to refer to the types under the
+shared `pipeline::Vector` name across crates — they're the same types either
+way.
 
 ## What's here
 

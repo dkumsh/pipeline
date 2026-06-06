@@ -1,11 +1,11 @@
-use pipeline::value::Vector;
+use pipeline_dsl::value::Vector;
 use pipeline_dsl::{pipeline, stage};
 use std::fs;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error(transparent)]
-    Pipeline(#[from] pipeline::Error), // so Reset errors map into AppError
+    Pipeline(#[from] pipeline_dsl::Error), // so Reset errors map into AppError
     #[error(transparent)]
     Io(#[from] std::io::Error), // used by write_html_to_file in main()
     #[error("bad data: {0}")]

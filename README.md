@@ -15,8 +15,10 @@ is decided**:
 | **[`pipeline-graph`](pipeline-graph)** | `pipeline_graph` | **dynamic** front-end — assemble the graph at runtime (`Graph`, `Input`/`Output`) | which stages/implementations/wiring exist is decided at runtime |
 | [`pipeline-macros`](pipeline-macros) | — | internal proc-macro crate behind `pipeline-dsl` | (don't depend on directly) |
 
-Both front-ends depend on `pipeline-core` and refer to the value types by one
-canonical name, `pipeline::Vector`, `pipeline::Value`, etc.
+Each front-end **re-exports** the value layer, so you depend on just the one
+front-end crate (`pipeline_dsl::Vector` / `pipeline_graph::Vector`). If you also
+depend on `pipeline-core` directly, the same types are available under the
+shared `pipeline::Vector` name — they're the identical re-exported types.
 
 ## Which one?
 
@@ -55,8 +57,7 @@ mod app {
 Dynamic (`pipeline-graph`):
 
 ```rust
-use pipeline::{Value, Vector};
-use pipeline_graph::{Flow, Graph, Input, Output};
+use pipeline_graph::{Flow, Graph, Input, Output, Value, Vector};
 
 let mut g = Graph::new();
 let xs  = g.slot::<Vector<u32>>("xs");

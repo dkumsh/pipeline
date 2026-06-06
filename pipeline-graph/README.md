@@ -9,17 +9,20 @@ reusing the same value layer and the same wiring rules.
 
 ## Setup
 
+A single dependency — `pipeline-graph` re-exports the value layer:
+
 ```toml
 [dependencies]
-pipeline-core  = "0.3"   # the value layer, used as `pipeline::...`
-pipeline-graph = "0.3"   # the runtime graph builder
+pipeline-graph = "0.4"
 ```
+
+(Optionally also depend on `pipeline-core` to refer to the value types under the
+shared `pipeline::` name; they're the same re-exported types.)
 
 ## Quick start
 
 ```rust
-use pipeline::{Value, Vector};
-use pipeline_graph::{Flow, Graph, Input, Output};
+use pipeline_graph::{Flow, Graph, Input, Output, Value, Vector};
 
 let mut g = Graph::new();
 let leaves = g.slot::<Vector<u32>>("leaves");

@@ -1,12 +1,12 @@
-use pipeline::value::Vector;
+use pipeline_dsl::value::Vector;
 use pipeline_dsl::{pipeline, stage};
 use thiserror::Error;
 
-/// Custom error type that converts pipeline::Error via `From`
+/// Custom error type that converts pipeline_dsl::Error via `From`
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error(transparent)]
-    Pipeline(#[from] pipeline::Error),
+    Pipeline(#[from] pipeline_dsl::Error),
 }
 
 #[pipeline(name = "MyPipeline", args = "config", error = "AppError")]

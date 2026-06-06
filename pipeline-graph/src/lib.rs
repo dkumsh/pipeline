@@ -31,6 +31,11 @@ use std::ptr::NonNull;
 
 use pipeline::{Error, Reset};
 
+// Re-export the value layer so a single `pipeline-graph` dependency suffices
+// (`pipeline_graph::Vector`). The same types are available under the shared
+// `pipeline::` name if you also depend on `pipeline-core` directly.
+pub use pipeline::{Buckets, Value, Vector, value};
+
 // ---------------------------------------------------------------------------
 // Slots
 // ---------------------------------------------------------------------------
