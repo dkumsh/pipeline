@@ -1,24 +1,22 @@
 <html lang="en">
 <head>
-    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.18.1/vis.min.js"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/vis/4.18.1/vis.min.css" rel="stylesheet" type="text/css"/>
+    <meta charset="utf-8"/>
+    <!-- Modern vis-network (standalone UMD: bundles vis-data's DataSet and its own CSS). -->
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
     <link rel="shortcut icon" href="#"/>
 </head>
 <body>
-<script type="text/javascript">
-    function showhideclass(id) {
-        var elements = document.getElementsByClassName(id)
-        for (var i = 0; i < elements.length; i++) {
-            elements[i].style.display = (elements[i].style.display != 'none') ? 'none' : 'block';
-        }
-    }
-</script>
 <style>
     @media print { .noPrint { display: none; } }
+    @media print { html, body { overflow: visible; } }
     html,
     body {
         height: 100%;
         margin: 0;
+        /* Fill the viewport exactly: the graph pans/zooms internally and the
+           sidebar scrolls internally, so the document itself never scrolls.
+           Without this, sub-pixel canvas sizing yields spurious window scrollbars. */
+        overflow: hidden;
     }
     body {
         display: flex;
@@ -27,7 +25,9 @@
     }
     #layout {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(320px, 460px);
+        /* Sidebar takes the controls' natural width (so no scrollbars when
+           there's room), capped so it can't crowd out the graph. */
+        grid-template-columns: minmax(0, 1fr) fit-content(680px);
         flex: 1 1 auto;
         min-height: 0;
         width: 100%;
@@ -36,8 +36,12 @@
     #layout.sidebar-collapsed {
         grid-template-columns: minmax(0, 1fr) 0;
     }
-    #mynetwork {
+    #graph {
+        position: relative;
         min-width: 0;
+        height: 100%;
+    }
+    #mynetwork {
         height: 100%;
     }
     #sidebar {
@@ -56,6 +60,7 @@
     }
     #sidebar-content {
         height: 100%;
+        /* Scroll only when the controls genuinely don't fit the viewport. */
         overflow: auto;
     }
     #layout.sidebar-collapsed #sidebar-content {
@@ -73,18 +78,26 @@
         line-height: 32px;
     }
     #details {
-        margin-bottom: 10px;
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        z-index: 1;
+        max-width: calc(100% - 16px);
+        box-sizing: border-box;
+        padding: 4px 8px;
+        background: rgba(255, 255, 255, 0.85);
+        border: 1px solid #ddd;
+        border-radius: 4px;
         overflow-wrap: anywhere;
     }
     #controls {
         padding-top: 8px;
-        overflow: auto;
     }
-    /* The vis configuration panel has wide fixed-width rows; let it shrink and
-       wrap/scroll inside the sidebar instead of being clipped. */
-    #controls .vis-configuration.vis-config-item {
-        max-width: 100%;
-        flex-wrap: wrap;
+    /* vis-network's configuration wrapper is a fixed 700px, but its rows are
+       only ~495px wide — leaving a generous empty gutter that makes the open
+       sidebar far wider than the controls need. Hug the real content width. */
+    #controls .vis-configuration-wrapper {
+        width: 520px;
     }
     footer {
         flex: 0 0 auto;
@@ -93,6 +106,10 @@
     }
     footer p {
         margin: 0;
+    }
+    /* No generation stamp (e.g. compile-time diagrams) → no empty status bar. */
+    footer:has(p:empty) {
+        display: none;
     }
     .button {
         background-color: #5555cc;
@@ -108,15 +125,14 @@
 </style>
 
 <div id="layout" class="sidebar-collapsed">
-    <div id="mynetwork"></div>
+    <div id="graph">
+        <div id="details">Pipeline: {{PIPELINE_NAME}}</div>
+        <div id="mynetwork"></div>
+    </div>
     <aside id="sidebar" class="noPrint">
         <button id="sidebar-toggle" onclick="javascript:toggleSidebar()" class="button" title="Show / hide sidebar" aria-expanded="false">&lt;</button>
         <div id="sidebar-content">
-            <div id="details">Pipeline: {{PIPELINE_NAME}}</div>
-            <button onclick="javascript:toggleControls()" class="button">
-                Show / hide graph controls
-            </button>
-            <div id="controls" class="controls" style="display:none"></div>
+            <div id="controls"></div>
         </div>
     </aside>
 </div>
@@ -126,11 +142,6 @@
         if (window.network) {
             window.network.redraw();
         }
-    }
-
-    function toggleControls() {
-        showhideclass('controls');
-        redrawNetwork();
     }
 
     function toggleSidebar() {
@@ -147,8 +158,8 @@
     var edgesArr = {{EDGES_JSON}};
 
     // Assign hierarchical levels by longest path from the sources, so every
-    // input node sits strictly left of the stage that consumes it. vis 4's
-    // "directed" sort alone misorders bipartite (data <-> stage) graphs.
+    // input node sits strictly left of the stage that consumes it (more
+    // reliable than leaving level assignment to the layout's "directed" sort).
     (function assignLevels() {
         var indeg = {}, adj = {}, level = {};
         nodesArr.forEach(function (n) { indeg[n.id] = 0; adj[n.id] = []; level[n.id] = 0; });
@@ -198,7 +209,8 @@
                 treeSpacing: 40,
                 blockShifting: true,
                 edgeMinimization: true,
-                parentCentralization: true
+                parentCentralization: true,
+                shakeTowards: 'roots'
             }
         },
         physics: { enabled: false },
@@ -221,11 +233,7 @@
     });
 </script>
 <footer>
-    <div class="container-fluid">
-        <div class="info">
-            <p>Pipeline dependencies graph</p>
-        </div>
-    </div>
+    <p>{{GENERATED_AT}}</p>
 </footer>
 </body>
 </html>

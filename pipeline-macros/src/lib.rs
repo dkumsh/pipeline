@@ -1220,7 +1220,9 @@ fn generate_diagram_json(
         }
     }
 
-    pipeline_diagram::graph_json(pipeline_name, &nodes, &edges)
+    // `None`: the static diagram is baked at compile time, so a wall-clock
+    // "generated at" stamp would only churn the build cache.
+    pipeline_diagram::graph_json(pipeline_name, &nodes, &edges, None)
 }
 
 #[proc_macro_attribute]

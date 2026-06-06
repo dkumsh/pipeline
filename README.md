@@ -71,6 +71,16 @@ let mut p = g.build().unwrap();
 
 See each crate's README and docs for full guides.
 
+## Visualize the graph
+
+Either front-end can render its wired graph as a standalone, self-contained
+interactive HTML page (via [`pipeline-diagram`](pipeline-diagram)) — pan/zoom,
+click a node for details, and a slide-out pane for layout/physics controls.
+Here's the [`telemetry_monitor`](pipeline-graph/examples/telemetry_monitor.rs)
+example (green boxes are stages, blue ellipses are values):
+
+![Interactive pipeline dependency graph](https://raw.githubusercontent.com/dkumsh/pipeline/main/pipeline-graph/doc/telemetry_monitor.png)
+
 ## License
 
 MIT OR Apache-2.0.

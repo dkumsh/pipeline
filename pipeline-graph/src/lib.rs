@@ -627,14 +627,21 @@ impl Pipeline {
         s
     }
 
-    /// Render the live graph as an interactive HTML diagram.
+    /// Render the live graph as an interactive HTML diagram, stamped with the
+    /// current local time (shown in the footer as when the diagram was generated).
     pub fn html_diagram(&self) -> String {
-        pipeline_diagram::render_html(&self.diagram_json()).expect("runtime diagram JSON is valid")
+        let generated_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let json = self.diagram_json_inner(Some(&generated_at));
+        pipeline_diagram::render_html(&json).expect("runtime diagram JSON is valid")
     }
 
     /// Return the live graph as a `pipeline-diagram` graph JSON (stages + slots
     /// as nodes, ports as edges). See `pipeline-diagram` for the shape.
     pub fn diagram_json(&self) -> String {
+        self.diagram_json_inner(None)
+    }
+
+    fn diagram_json_inner(&self, generated_at: Option<&str>) -> String {
         let mut nodes = Vec::with_capacity(self.stages.len() + self.store.nodes.len());
         for (ix, st) in self.stages.iter().enumerate() {
             nodes.push(Node {
@@ -671,7 +678,7 @@ impl Pipeline {
             }
         }
 
-        pipeline_diagram::graph_json(&self.name, &nodes, &edges)
+        pipeline_diagram::graph_json(&self.name, &nodes, &edges, generated_at)
     }
 
     /// Write [`Pipeline::html_diagram`] to a file.

@@ -8,7 +8,11 @@ description = "Dynamic (runtime-wired) pipeline graph over the pipeline-core val
 repository.workspace = true
 keywords.workspace = true
 readme = "README.md"
+# Doc images are shown in the README via absolute raw-GitHub URLs, so there's no
+# need to ship them in the published crate.
+exclude = ["doc/*.png"]
 
 [dependencies]
 pipeline-core = { path = "../pipeline-core", version = "0.5" }
 pipeline-diagram = { path = "../pipeline-diagram", version = "0.5" }
+chrono = { workspace = true }

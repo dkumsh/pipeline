@@ -13,6 +13,7 @@
 //! ```json
 //! {
 //!   "pipeline_name": "MyPipeline",
+//!   "metadata": { "generated_at": "2026-06-06 14:30:00" },
 //!   "nodes": [
 //!     { "id": "score",   "label": "score",  "group": "stage",    "full_label": "Stage: score" },
 //!     { "id": "$leaves", "label": "leaves", "group": "variable" }
@@ -22,6 +23,8 @@
 //! ```
 //!
 //! - `pipeline_name` — shown in the diagram header.
+//! - `metadata.generated_at` — optional; a free-form string shown in the footer
+//!   (e.g. when the graph was generated). Omitted from the footer if absent.
 //! - `nodes[].id` — unique, referenced by edges. `label` — short display text.
 //!   `group` — `"stage"` (function node) or `"variable"` (data node); drives
 //!   styling. `full_label` — optional; shown in the details panel on click
@@ -80,7 +83,15 @@ pub struct Edge {
 /// from typed parts, so producers don't hand-write the field names / `group`
 /// values. Building the JSON yourself and calling [`render_html`] works equally
 /// well — this is just a shared helper.
-pub fn graph_json(pipeline_name: &str, nodes: &[Node], edges: &[Edge]) -> String {
+///
+/// `generated_at` is an optional footer string (e.g. when the graph was
+/// generated); pass `None` to omit it.
+pub fn graph_json(
+    pipeline_name: &str,
+    nodes: &[Node],
+    edges: &[Edge],
+    generated_at: Option<&str>,
+) -> String {
     let nodes: Vec<Value> = nodes
         .iter()
         .map(|n| {
@@ -98,7 +109,14 @@ pub fn graph_json(pipeline_name: &str, nodes: &[Node], edges: &[Edge]) -> String
         .iter()
         .map(|e| json!({ "from": e.from, "to": e.to }))
         .collect();
-    json!({ "pipeline_name": pipeline_name, "nodes": nodes, "edges": edges }).to_string()
+    let mut root = Map::new();
+    root.insert("pipeline_name".into(), json!(pipeline_name));
+    if let Some(ts) = generated_at {
+        root.insert("metadata".into(), json!({ "generated_at": ts }));
+    }
+    root.insert("nodes".into(), Value::Array(nodes));
+    root.insert("edges".into(), Value::Array(edges));
+    Value::Object(root).to_string()
 }
 
 /// Render a graph (see the crate-level docs for the JSON shape) into a
@@ -114,10 +132,17 @@ pub fn render_html(graph_json: &str) -> Result<String, serde_json::Error> {
         .unwrap_or("");
     let nodes = serde_json::to_string(spec.get("nodes").unwrap_or(&Value::Array(Vec::new())))?;
     let edges = serde_json::to_string(spec.get("edges").unwrap_or(&Value::Array(Vec::new())))?;
+    let generated = spec
+        .get("metadata")
+        .and_then(|m| m.get("generated_at"))
+        .and_then(Value::as_str)
+        .map(|ts| format!("Generated {ts}"))
+        .unwrap_or_default();
     Ok(TEMPLATE
         .replace("{{PIPELINE_NAME}}", name)
         .replace("{{NODES_JSON}}", &nodes)
-        .replace("{{EDGES_JSON}}", &edges))
+        .replace("{{EDGES_JSON}}", &edges)
+        .replace("{{GENERATED_AT}}", &generated))
 }
 
 #[cfg(test)]
@@ -126,6 +151,7 @@ mod tests {
 
     const SPEC: &str = r#"{
         "pipeline_name": "Demo",
+        "metadata": { "generated_at": "2026-06-06 14:30:00" },
         "nodes": [ { "id": "s0", "label": "copy", "group": "stage", "full_label": "Stage: copy" } ],
         "edges": [ { "from": "n0", "to": "s0" } ]
     }"#;
@@ -160,5 +186,22 @@ mod tests {
         assert!(html.contains("Pipeline: Empty"));
         assert!(html.contains("var nodesArr = [];"));
         assert!(html.contains("var edgesArr = [];"));
+        // No metadata.generated_at → no footer date, no leftover placeholder.
+        assert!(!html.contains("{{GENERATED_AT}}"));
+        assert!(!html.contains("Generated "));
+    }
+
+    #[test]
+    fn generated_at_shows_in_footer() {
+        let html = render_html(SPEC).unwrap();
+        assert!(html.contains("Generated 2026-06-06 14:30:00"));
+    }
+
+    #[test]
+    fn graph_json_metadata_round_trips() {
+        let with = graph_json("P", &[], &[], Some("2026-06-06"));
+        assert!(with.contains(r#""metadata":{"generated_at":"2026-06-06"}"#));
+        let without = graph_json("P", &[], &[], None);
+        assert!(!without.contains("metadata"));
     }
 }

@@ -16,11 +16,17 @@ anything). It's also the shared diagram layer for the
 which is why the shape and rendering live here, in one place — but it has no
 dependency on those crates.
 
+The rendered page — title overlay, pan/zoom canvas, a slide-out controls pane,
+and a footer timestamp:
+
+![Example rendered diagram](https://raw.githubusercontent.com/dkumsh/pipeline/main/pipeline-graph/doc/telemetry_monitor.png)
+
 ## JSON shape
 
 ```json
 {
   "pipeline_name": "MyPipeline",
+  "metadata": { "generated_at": "2026-06-06 14:30:00" },
   "nodes": [
     { "id": "score",   "label": "score",  "group": "stage",    "full_label": "Stage: score" },
     { "id": "$leaves", "label": "leaves", "group": "variable" }
@@ -30,6 +36,8 @@ dependency on those crates.
 ```
 
 - `pipeline_name` — shown in the header.
+- `metadata.generated_at` — optional; free-form string shown in the footer
+  (when the graph was generated). Omitted from the footer if absent.
 - `nodes[].id` — unique, referenced by edges. `label` — short text. `group` —
   `"stage"` (function node) or `"variable"` (data node); drives styling.
   `full_label` — optional; shown in the details panel on click (falls back to
@@ -56,6 +64,7 @@ let json = graph_json(
                full_label: None },
     ],
     &[Edge { from: "$leaves".into(), to: "score".into() }],
+    Some("2026-06-06 14:30:00"), // footer "generated at"; None to omit
 );
 let html = pipeline_diagram::render_html(&json)?;
 ```
