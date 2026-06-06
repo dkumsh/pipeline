@@ -26,23 +26,51 @@
         font-family: sans-serif;
     }
     #layout {
-        display: flex;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
         flex: 1 1 auto;
         min-height: 0;
         width: 100%;
+        transition: grid-template-columns 180ms ease;
+    }
+    #layout.sidebar-collapsed {
+        grid-template-columns: minmax(0, 1fr) 0;
     }
     #mynetwork {
-        flex: 1 1 auto;
         min-width: 0;
         height: 100%;
     }
     #sidebar {
-        flex: 0 0 340px;
-        max-width: 40vw;
+        position: relative;
+        min-width: 0;
         box-sizing: border-box;
         border-left: 1px solid #ddd;
-        overflow: auto;
+        overflow: visible;
         padding: 10px;
+        transition: padding 180ms ease, border-color 180ms ease;
+    }
+    #layout.sidebar-collapsed #sidebar {
+        border-left-color: transparent;
+        padding-left: 0;
+        padding-right: 0;
+    }
+    #sidebar-content {
+        height: 100%;
+        overflow: auto;
+    }
+    #layout.sidebar-collapsed #sidebar-content {
+        display: none;
+    }
+    #sidebar-toggle {
+        position: absolute;
+        top: 10px;
+        left: -38px;
+        z-index: 2;
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        font-size: 20px;
+        line-height: 32px;
     }
     #details {
         margin-bottom: 10px;
@@ -72,23 +100,40 @@
     }
 </style>
 
-<div id="layout">
+<div id="layout" class="sidebar-collapsed">
     <div id="mynetwork"></div>
     <aside id="sidebar" class="noPrint">
-        <div id="details">Pipeline: {{PIPELINE_NAME}}</div>
-        <button onclick="javascript:toggleControls()" class="button">
-            Show / hide graph controls
-        </button>
-        <div id="controls" class="controls" style="display:none"></div>
+        <button id="sidebar-toggle" onclick="javascript:toggleSidebar()" class="button" title="Show / hide sidebar" aria-expanded="false">&lt;</button>
+        <div id="sidebar-content">
+            <div id="details">Pipeline: {{PIPELINE_NAME}}</div>
+            <button onclick="javascript:toggleControls()" class="button">
+                Show / hide graph controls
+            </button>
+            <div id="controls" class="controls" style="display:none"></div>
+        </div>
     </aside>
 </div>
 
 <script type="text/javascript">
-    function toggleControls() {
-        showhideclass('controls');
+    function redrawNetwork() {
         if (window.network) {
             window.network.redraw();
         }
+    }
+
+    function toggleControls() {
+        showhideclass('controls');
+        redrawNetwork();
+    }
+
+    function toggleSidebar() {
+        var layout = document.getElementById('layout');
+        var button = document.getElementById('sidebar-toggle');
+        var collapsed = layout.classList.toggle('sidebar-collapsed');
+        button.innerHTML = collapsed ? '&lt;' : '&gt;';
+        button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        redrawNetwork();
+        window.setTimeout(redrawNetwork, 220);
     }
 
     var nodes = new vis.DataSet({{NODES_JSON}});
@@ -130,7 +175,6 @@
         }
     });
 </script>
-</body>
 <footer>
     <div class="container-fluid">
         <div class="info">
@@ -138,4 +182,5 @@
         </div>
     </div>
 </footer>
+</body>
 </html>
