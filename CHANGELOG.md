@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-06
+
+### Changed (front-ends are now single-dependency)
+
+- A `#[pipeline]` / `pipeline-graph` user now depends on **only the front-end
+  crate**; each re-exports the value layer.
+  - `pipeline-macros` now emits `pipeline_dsl::…` paths (was `pipeline::…`), so
+    the macro's generated code resolves its runtime support through
+    `pipeline-dsl` rather than requiring a direct `pipeline-core` dependency.
+  - `pipeline-dsl` re-exports the value layer + `Reset`/`Error`
+    (`pipeline_dsl::Vector`); `pipeline-graph` re-exports the value layer
+    (`pipeline_graph::Vector`).
+  - The shared `pipeline::Vector` name still works **if** you also depend on
+    `pipeline-core` directly — the same re-exported types.
+- `pipeline-dsl` now exact-pins `pipeline-macros` (`=0.5.0`): the macro's emitted
+  paths are coupled to the front-end's re-exports, so they move in lockstep.
+
+> Minor bump (not 0.4.1) on purpose: the changed macro emission is incompatible
+> with the already-published `pipeline-dsl 0.4.0` (which doesn't re-export the
+> needed items). A minor bump isolates the new, self-consistent crate set;
+> `0.4.0` users on `^0.4` are unaffected.
+
 ## [0.4.0] - 2026-06-06
 
 ### Added
@@ -27,17 +49,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `pipeline::Vector` works alongside `pipeline::value::Vector`.
   - **`pipeline-macros`** — the `#[pipeline]`/`#[stage]` proc macros (renamed
     from `pipeline-dsl-macros`).
-  - **`pipeline-dsl`** (lib `pipeline_dsl`) — the static front-end. **Macros
-    import moves: `use pipeline::{pipeline, stage}` → `use pipeline_dsl::{pipeline,
-    stage}`.** Self-contained: it re-exports the value layer, and the macro's
-    generated code resolves its runtime support through `pipeline-dsl`, so a
-    single `pipeline-dsl` dependency suffices (`pipeline_dsl::Vector`).
+  - **`pipeline-dsl`** (lib `pipeline_dsl`) — the static front-end; re-exports the
+    macros. **Macros import moves: `use pipeline::{pipeline, stage}` → `use
+    pipeline_dsl::{pipeline, stage}`.** Value types come from `pipeline`
+    (`pipeline-core`), which a `#[pipeline]` user must depend on directly.
   - **`pipeline-graph`** (lib `pipeline_graph`) — the dynamic front-end; depends
-    only on `pipeline-core` (no macros pulled in) and re-exports the value layer
-    (`pipeline_graph::Vector`), so it too is a single dependency.
-- Either front-end can be used alone. If you *also* depend on `pipeline-core`
-  directly, the value types are available under the shared `pipeline::` name
-  (`pipeline::Vector`) — the same re-exported types.
+    only on `pipeline-core` (no macros pulled in); value types from
+    `pipeline::{Value, Vector}`.
 
 ## [0.3.4] - 2026-06-04
 

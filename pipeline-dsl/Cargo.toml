@@ -10,8 +10,10 @@ keywords.workspace = true
 readme = "README.md"
 
 [dependencies]
-pipeline-core = { path = "../pipeline-core", version = "0.4" }
-pipeline-macros = { path = "../pipeline-macros", version = "0.4" }
+pipeline-core = { path = "../pipeline-core", version = "0.5" }
+# Exact-pinned: the macro's generated paths are coupled to what this crate
+# re-exports, so the two must move in lockstep.
+pipeline-macros = { path = "../pipeline-macros", version = "=0.5.0" }
 
 [dev-dependencies]
 thiserror = { workspace = true }
