@@ -15,6 +15,50 @@
 </script>
 <style>
     @media print { .noPrint { display: none; } }
+    html,
+    body {
+        height: 100%;
+        margin: 0;
+    }
+    body {
+        display: flex;
+        flex-direction: column;
+        font-family: sans-serif;
+    }
+    #layout {
+        display: flex;
+        flex: 1 1 auto;
+        min-height: 0;
+        width: 100%;
+    }
+    #mynetwork {
+        flex: 1 1 auto;
+        min-width: 0;
+        height: 100%;
+    }
+    #sidebar {
+        flex: 0 0 340px;
+        max-width: 40vw;
+        box-sizing: border-box;
+        border-left: 1px solid #ddd;
+        overflow: auto;
+        padding: 10px;
+    }
+    #details {
+        margin-bottom: 10px;
+        overflow-wrap: anywhere;
+    }
+    #controls {
+        padding-top: 8px;
+    }
+    footer {
+        flex: 0 0 auto;
+        border-top: 1px solid #ddd;
+        padding: 6px 10px;
+    }
+    footer p {
+        margin: 0;
+    }
     .button {
         background-color: #5555cc;
         border: none;
@@ -24,22 +68,29 @@
         text-decoration: none;
         display: inline-block;
         font-size: 18px;
+        cursor: pointer;
     }
 </style>
 
-<div style="width: 100%;">
-    <div id="mynetwork" style="float:left; width: 70%;"></div>
-    <div style="float:right;width:30%;">
-        <div id="details" style="padding:10;" class="noPrint">Pipeline: {{PIPELINE_NAME}}</div>
-        <button onclick="javascript:showhideclass('controls')" class="button noPrint">
+<div id="layout">
+    <div id="mynetwork"></div>
+    <aside id="sidebar" class="noPrint">
+        <div id="details">Pipeline: {{PIPELINE_NAME}}</div>
+        <button onclick="javascript:toggleControls()" class="button">
             Show / hide graph controls
         </button>
-        <div id="controls" class="controls" style="padding:5; display:none"></div>
-    </div>
+        <div id="controls" class="controls" style="display:none"></div>
+    </aside>
 </div>
-<div style="clear:both"></div>
 
 <script type="text/javascript">
+    function toggleControls() {
+        showhideclass('controls');
+        if (window.network) {
+            window.network.redraw();
+        }
+    }
+
     var nodes = new vis.DataSet({{NODES_JSON}});
     var edges = new vis.DataSet({{EDGES_JSON}});
 
@@ -65,7 +116,8 @@
     };
 
     let network = new vis.Network(container, {nodes, edges}, options);
-    network.setSize('1000px', '70%');
+    window.network = network;
+    network.setSize('100%', '100%');
     network.redraw();
     network.on('click', function (properties) {
         var ids = properties.nodes;
