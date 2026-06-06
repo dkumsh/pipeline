@@ -1,6 +1,20 @@
 use pipeline::{Value, Vector};
 use pipeline_graph::{Flow, Graph, GraphError, Input, Output};
 
+#[test]
+fn graph_new_uses_default_name() {
+    let p = Graph::new().build().expect("empty graph is valid");
+    assert_eq!(p.name(), "pipeline");
+}
+
+#[test]
+fn graph_named_carries_name_to_pipeline() {
+    let p = Graph::named("TelemetryMonitor")
+        .build()
+        .expect("empty graph is valid");
+    assert_eq!(p.name(), "TelemetryMonitor");
+}
+
 // leaves (external) -> synthesize -> synths -> total -> sum
 #[test]
 fn basic_dataflow_and_reset() {

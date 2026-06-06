@@ -135,8 +135,10 @@ the engine's internal `Runner`.
 
 ### `Graph` → `Pipeline`
 
-- **`Graph`** — the runtime builder. `slot`/`arg`/`external` declare data nodes;
-  `stage` registers stages. `build()` validates and produces a `Pipeline`.
+- **`Graph`** — the runtime builder. `Graph::new()` uses the default display
+  name `"pipeline"`; `Graph::named("...")` lets callers provide a name for
+  diagram/reporting APIs. `slot`/`arg`/`external` declare data nodes; `stage`
+  registers stages. `build()` validates and produces a `Pipeline`.
 - **`Pipeline`** — a validated, executable graph. `compute()` runs one cycle;
   `get`/`get_mut`/`set` feed inputs and inspect outputs between cycles; `dot()`
   emits the live graph as Graphviz.

@@ -364,6 +364,7 @@ struct StageDef {
 
 /// Runtime builder for a pipeline graph.
 pub struct Graph {
+    name: String,
     store: Store,
     stages: Vec<StageDef>,
 }
@@ -377,7 +378,14 @@ impl Default for Graph {
 impl Graph {
     /// Create an empty graph builder.
     pub fn new() -> Self {
+        Self::named("pipeline")
+    }
+
+    /// Create an empty graph builder with a display name used by diagram
+    /// generation.
+    pub fn named(name: impl Into<String>) -> Self {
         Graph {
+            name: name.into(),
             store: Store { nodes: Vec::new() },
             stages: Vec::new(),
         }
@@ -534,6 +542,7 @@ impl Graph {
         }
 
         Ok(Pipeline {
+            name: self.name,
             store: self.store,
             stages: self.stages,
             order,
@@ -547,12 +556,18 @@ impl Graph {
 
 /// A validated, executable graph. Run it with [`Pipeline::compute`].
 pub struct Pipeline {
+    name: String,
     store: Store,
     stages: Vec<StageDef>,
     order: Vec<usize>,
 }
 
 impl Pipeline {
+    /// Display name of this runtime graph, used by diagram generation.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     /// Run all stages in topological order, then clear the per-cycle dirty state
     /// of every written and external slot — exactly the static `compute()`.
     pub fn compute(&mut self) -> Result<(), Error> {

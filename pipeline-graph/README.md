@@ -24,7 +24,7 @@ shared `pipeline::` name; they're the same re-exported types.)
 ```rust
 use pipeline_graph::{Flow, Graph, Input, Output, Value, Vector};
 
-let mut g = Graph::new();
+let mut g = Graph::named("TelemetryMonitor"); // Graph::new() defaults to "pipeline"
 let leaves = g.slot::<Vector<u32>>("leaves");
 let synths = g.slot::<Vector<u32>>("synths");
 let total  = g.slot::<Value<u32>>("total");
@@ -61,6 +61,8 @@ assert_eq!(p.get(total).get_valid(), Some(&60));
   doesn't matter).
 - **Per-cycle reset**, **`Flow::Break`** early-exit, **runtime reconfiguration**
   (choose stages/implementations/wiring at runtime), and a `dot()` diagram.
+- **Optional graph name** via `Graph::named("...")`, carried into the built
+  `Pipeline` for diagram/reporting APIs.
 
 See `examples/telemetry_monitor.rs` for a complete worked example and
 `doc/design.md` for concepts, design decisions, and the type-erasure chapter.
