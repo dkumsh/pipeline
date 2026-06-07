@@ -97,6 +97,10 @@ actually does work. `p.reset_stats()` zeroes the counters and starts a fresh
 window; `p.stats_age()` gives the monotonic time since that reset, so you can turn
 counts into rates (`stage.ran / age`) or utilization (`stage.time / age`).
 
+(Enabling this means every `slot::<T>` now also requires `T: Updated` so the
+engine can query its dirtiness — `Value`/`Vector`/`Buckets` satisfy it; a custom
+slot type must `impl Updated`. `arg` and context are unaffected.)
+
 ### Interactive HTML diagram
 
 `write_html_to_file` renders the live graph as a standalone, self-contained

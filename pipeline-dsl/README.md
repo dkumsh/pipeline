@@ -137,7 +137,8 @@ Add the `stats` flag to measure it — `#[pipeline(name = "P", stats)]` generate
 `collect_stats(bool)` (off by default), `stats() -> &[StageStats]`
 (`{ name, ran, skipped, time }`), `reset_stats()`, and `stats_age()`, so you can
 see how often each stage actually does work. Without `stats`, no stats fields or
-methods are generated (zero cost); skipping still works.
+methods are generated (zero cost); skipping still works. See the runnable
+[`demand_driven`](../pipeline-example/examples/demand_driven.rs) example.
 
 See the repository for the full guide (binding rules, multiple contexts,
 generics, diagrams, diagnostics).

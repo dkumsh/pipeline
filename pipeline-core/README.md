@@ -20,6 +20,11 @@ way.
   bits (incremental, cycle-based recompute).
 - **`Buckets<T>`** — indexed accumulation.
 - **`Reset`** — clears per-cycle *dirty* state (contents/validity are preserved).
+- **`Updated`** — read-side mirror of `Reset`: `is_updated()`, whether a value
+  changed this cycle (written *or* invalidated). Front-ends use it to decide
+  whether a `skip_when_clean` stage has fresh input.
+- **`StageStats`** — per-stage run/skip/time counters, shared by both
+  front-ends' optional stats support.
 - **`Error`** — the shared error type.
 
 ```rust

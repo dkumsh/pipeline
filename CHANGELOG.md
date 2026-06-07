@@ -38,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `pipeline-graph`: `Graph::slot::<T>` now also requires `T: Updated` (every node
+  carries an `is_updated` glue for the skip check). The built-in slot types
+  (`Value`/`Vector`/`Buckets`) satisfy it, so this is transparent; **potentially
+  breaking** only for a custom slot type, which must now `impl Updated` alongside
+  `Default + Reset`. `arg::<T>` and `context` are unaffected.
 - `pipeline-dsl`: `args` (constructor config) and `#[state]` fields of the
   generated struct are now **private** instead of `pub` — they're
   pipeline-internal. Stage outputs and `external` inputs stay `pub`. In-crate

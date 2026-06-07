@@ -33,6 +33,13 @@ shared `pipeline::Vector` name — they're the identical re-exported types.
 Both share `pipeline-core`'s dirty/validity-tracking values, so the
 "recompute only what changed" model works identically in either.
 
+**Demand-driven scheduling (opt-in, both front-ends).** Mark a stage
+`skip_when_clean` and it's skipped in any cycle where none of its inputs changed
+— a skipped stage doesn't run or write, so "unchanged" propagates to its
+readers. Opt into per-stage stats (`#[pipeline(stats)]` / `Pipeline::collect_stats`)
+to see how often each stage actually does work (run/skip counts + timing). See
+the runnable [`demand_driven`](pipeline-example/examples/demand_driven.rs) example.
+
 **Safety asymmetry (deliberate):** the static front-end is fully compile-time
 checked and contains no `unsafe`. The dynamic front-end trades that for runtime
 flexibility — wiring is validated at `build()` instead of by the compiler, and
