@@ -40,3 +40,20 @@ pub trait Updated {
     /// Whether the value changed this cycle.
     fn is_updated(&self) -> bool;
 }
+
+/// Per-stage execution counters, shared by both front-ends' optional stats
+/// support (`pipeline-graph`'s `Pipeline::stats`, `pipeline-dsl`'s
+/// `#[pipeline(stats)]`). Stored contiguously and handed out by reference, so
+/// reading them costs nothing regardless of how this struct grows.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct StageStats {
+    /// Stage name.
+    pub name: String,
+    /// Number of cycles the stage actually ran.
+    pub ran: u64,
+    /// Number of cycles the stage was skipped because no input was dirty
+    /// (only possible for `skip_when_clean` stages).
+    pub skipped: u64,
+    /// Total wall-clock time spent running the stage.
+    pub time: std::time::Duration,
+}

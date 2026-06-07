@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `pipeline-dsl`: demand-driven scheduling + optional stats, mirroring
+  `pipeline-graph`. `#[stage(skip_when_clean)]` makes the generated `compute()`
+  skip a stage in any cycle where none of its input slots changed (`is_updated()`);
+  a stage whose only inputs are `args`/`context` is a compile error. `args` are
+  excluded from the dirty check. The bare `#[pipeline(stats)]` flag generates
+  per-stage stats — `collect_stats(bool)`, `stats() -> &[StageStats]`,
+  `reset_stats()`, `stats_age()` — with zero fields/overhead when not requested.
+- `pipeline-core`: `StageStats` moved here (re-exported by both front-ends) so the
+  type is shared.
 - `pipeline-graph`: opt-in **demand-driven scheduling**. `Graph::stage_skip_when_clean`
   registers a stage the engine may skip in any cycle where none of its declared
   `Input` slots changed (`is_updated()`); a skipped stage doesn't run and doesn't

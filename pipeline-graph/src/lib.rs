@@ -36,7 +36,7 @@ use pipeline_diagram::{Edge, Group, Node};
 // Re-export the value layer so a single `pipeline-graph` dependency suffices
 // (`pipeline_graph::Vector`). The same types are available under the shared
 // `pipeline::` name if you also depend on `pipeline-core` directly.
-pub use pipeline::{Buckets, Updated, Value, Vector, value};
+pub use pipeline::{Buckets, StageStats, Updated, Value, Vector, value};
 
 // ---------------------------------------------------------------------------
 // Slots
@@ -633,24 +633,6 @@ pub struct Pipeline {
     /// [`Pipeline::reset_stats`]. `None` until the first reset (so `build()`
     /// reads no clock). Powers [`Pipeline::stats_age`] for rate/utilization math.
     stats_since: Option<Instant>,
-}
-
-/// Per-stage execution counters gathered by `compute()` while stats collection
-/// is enabled (see [`Pipeline::collect_stats`]). Stored contiguously and handed
-/// out by reference via [`Pipeline::stats`] (`&[StageStats]`), so reading them
-/// costs nothing regardless of how this struct grows.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct StageStats {
-    /// Stage name.
-    pub name: String,
-    /// Number of cycles the stage actually ran.
-    pub ran: u64,
-    /// Number of cycles the stage was skipped because no input was dirty
-    /// (only possible for stages registered via
-    /// [`Graph::stage_skip_when_clean`]).
-    pub skipped: u64,
-    /// Total wall-clock time spent running the stage.
-    pub time: Duration,
 }
 
 impl Pipeline {

@@ -15,5 +15,6 @@ pub use pipeline_macros::{pipeline, stage};
 
 // Re-export the value layer so `#[pipeline]` users need only this one crate.
 // `Reset` and `Error` are what the generated code references; the value types
-// are re-exported for caller convenience (`pipeline_dsl::Vector`).
-pub use pipeline::{Buckets, Error, Reset, Value, Vector, value};
+// are re-exported for caller convenience (`pipeline_dsl::Vector`). `StageStats`
+// is referenced by the code generated for `#[pipeline(stats)]`.
+pub use pipeline::{Buckets, Error, Reset, StageStats, Updated, Value, Vector, value};

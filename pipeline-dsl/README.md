@@ -60,9 +60,11 @@ no second dependency required.
 
 ## Attribute summary
 
-- `#[pipeline(name="…", args="…", context="…", external="…", error="…", controlflow_break="…", constructor="…")]`
-  — declares the pipeline container; `args`/`context`/`external` describe inputs.
-- `#[stage]` — marks a function as a stage. Parameter attributes: `#[rename = "field"]`,
+- `#[pipeline(name="…", args="…", context="…", external="…", error="…", controlflow_break="…", constructor="…", stats)]`
+  — declares the pipeline container; `args`/`context`/`external` describe inputs;
+  the bare `stats` flag opts into per-stage stats (below).
+- `#[stage]` — marks a function as a stage; `#[stage(skip_when_clean)]` opts it
+  into demand-driven scheduling (below). Parameter attributes: `#[rename = "field"]`,
   `#[skip_reset]`, `#[unused]`, `#[state]`.
 
 ### Parameter kinds
@@ -114,6 +116,28 @@ impl P {
     pub fn with_caps(n: usize) -> Self { /* build all fields yourself */ }
 }
 ```
+
+### Demand-driven scheduling (opt-in)
+
+By default every stage runs each `compute()`. Mark one
+`#[stage(skip_when_clean)]` and the generated `compute()` **skips it in any cycle
+where none of its input slots changed** (`is_updated()`) — a skipped stage
+doesn't run and doesn't write, so "unchanged" propagates to its readers (and a
+value→invalid transition, being dirty, wakes them). `args` and `context` don't
+count as dirty triggers; a stage whose only inputs are those is a compile error
+(it would never run). Same contract as the dynamic front-end: the body must be a
+pure function of its declared inputs.
+
+```rust
+#[stage(skip_when_clean)]
+pub fn refine(cfg: &Config, src: &Vector<u32>, dst: &mut Vector<u32>) { /* recompute dst from src */ }
+```
+
+Add the `stats` flag to measure it — `#[pipeline(name = "P", stats)]` generates
+`collect_stats(bool)` (off by default), `stats() -> &[StageStats]`
+(`{ name, ran, skipped, time }`), `reset_stats()`, and `stats_age()`, so you can
+see how often each stage actually does work. Without `stats`, no stats fields or
+methods are generated (zero cost); skipping still works.
 
 See the repository for the full guide (binding rules, multiple contexts,
 generics, diagrams, diagnostics).

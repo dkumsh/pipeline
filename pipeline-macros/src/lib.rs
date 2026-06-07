@@ -62,6 +62,7 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
         &attr_args.external_names,
         attr_args.break_ty.as_ref(),
         attr_args.reset_on_break,
+        attr_args.stats,
     ) {
         Ok(calls) => calls,
         Err(e) => return e.to_compile_error().into(),
@@ -96,6 +97,10 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
         constructor_args.iter().map(|i| i.to_string()).collect();
     private_fields.extend(collect_state_names(&stages, context_names));
 
+    // Stage names in registration (module) order — the init order for the
+    // optional per-stage stats vec, matching the indices used in `compute()`.
+    let stage_names: Vec<String> = stages.iter().map(|s| s.sig.ident.to_string()).collect();
+
     // Generate the struct (context is not included)
     let struct_def = generate_struct(
         &pipeline_name,
@@ -103,6 +108,8 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
         &fields,
         &pipeline_vars,
         &private_fields,
+        attr_args.stats,
+        &main_crate_ident,
     );
 
     // Generate the impl block
@@ -122,6 +129,8 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
         attr_args.break_ty.as_ref(),
         &main_crate_ident,
         attr_args.constructor_manual,
+        attr_args.stats,
+        &stage_names,
     );
 
     // Reconstruct the module with stages unmodified
@@ -149,6 +158,8 @@ struct PipelineArgs {
     break_ty: Option<Type>,
     reset_on_break: bool,
     constructor_manual: bool,
+    /// Bare `stats` flag: generate per-stage stats fields + methods.
+    stats: bool,
 }
 
 impl Parse for PipelineArgs {
@@ -162,9 +173,18 @@ impl Parse for PipelineArgs {
         let mut break_ty: Option<Type> = None;
         let mut reset_on_break = false;
         let mut constructor_manual = false;
+        let mut stats = false;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
+            // `stats` is a bare flag (no `= value`).
+            if key == "stats" && !input.peek(syn::Token![=]) {
+                stats = true;
+                if input.peek(syn::Token![,]) {
+                    input.parse::<syn::Token![,]>()?;
+                }
+                continue;
+            }
             input.parse::<syn::Token![=]>()?;
             if key == "name" {
                 let value: LitStr = input.parse()?;
@@ -239,7 +259,7 @@ impl Parse for PipelineArgs {
             } else {
                 return Err(syn::Error::new_spanned(
                     key,
-                    "Expected 'name', 'generics', 'args', 'context', 'external', 'error', 'controlflow_break', 'reset_on_break', or 'constructor' in pipeline attribute",
+                    "Expected 'name', 'generics', 'args', 'context', 'external', 'error', 'controlflow_break', 'reset_on_break', 'constructor', or 'stats' in pipeline attribute",
                 ));
             }
             if input.peek(syn::Token![,]) {
@@ -264,6 +284,7 @@ impl Parse for PipelineArgs {
             break_ty,
             reset_on_break,
             constructor_manual,
+            stats,
         })
     }
 }
@@ -519,6 +540,8 @@ fn generate_struct(
     fields: &[(Ident, Type)],
     pipeline_vars: &[String],
     private_fields: &HashSet<String>,
+    stats: bool,
+    main_crate_ident: &Ident,
 ) -> proc_macro2::TokenStream {
     let g = generics.cloned().unwrap_or_default();
     let (_impl_g, _ty_g, where_clause) = g.split_for_impl();
@@ -541,10 +564,22 @@ fn generate_struct(
 
     let (phantom_field, _phantom_init) = build_phantom_tokens(&g);
 
+    // Optional per-stage stats state (private; `#[pipeline(stats)]`).
+    let stats_fields = if stats {
+        quote! {
+            __stage_stats: ::std::vec::Vec<#main_crate_ident::StageStats>,
+            __stats_enabled: bool,
+            __stats_since: ::core::option::Option<::std::time::Instant>,
+        }
+    } else {
+        quote! {}
+    };
+
     quote! {
         pub struct #pipeline_name #g #where_clause {
             pub pipeline_vars: [&'static str; #vars_len],
             #(#field_defs,)*
+            #stats_fields
             #phantom_field
         }
     }
@@ -567,6 +602,8 @@ fn generate_impl(
     break_ty: Option<&Type>,
     main_crate_ident: &Ident,
     constructor_manual: bool,
+    stats: bool,
+    stage_names: &[String],
 ) -> proc_macro2::TokenStream {
     let g = generics.cloned().unwrap_or_default();
     let (impl_generics, ty_generics, where_clause) = g.split_for_impl();
@@ -632,6 +669,59 @@ fn generate_impl(
         quote! { where #(#default_bounds),* }
     };
 
+    // Optional per-stage stats: the `new()` initializer for the stats fields,
+    // and the accessor methods. Names are baked in registration order so the
+    // indices match those `compute()` uses.
+    let stats_init = if stats {
+        let entries = stage_names.iter().map(|n| {
+            quote! {
+                #main_crate_ident::StageStats {
+                    name: #n.into(),
+                    ran: 0,
+                    skipped: 0,
+                    time: ::std::time::Duration::ZERO,
+                }
+            }
+        });
+        quote! {
+            __stage_stats: ::std::vec![ #(#entries),* ],
+            __stats_enabled: false,
+            __stats_since: ::core::option::Option::None,
+        }
+    } else {
+        quote! {}
+    };
+
+    let stats_methods = if stats {
+        quote! {
+            /// Enable or disable per-stage stats recording. Off by default; when
+            /// off, `compute()` writes no counters and reads no clock.
+            pub fn collect_stats(&mut self, enable: bool) -> &mut Self {
+                self.__stats_enabled = enable;
+                self
+            }
+            /// Per-stage counters (registration order) as a borrowed slice.
+            pub fn stats(&self) -> &[#main_crate_ident::StageStats] {
+                &self.__stage_stats
+            }
+            /// Zero every stage's counters and start a fresh measurement window.
+            pub fn reset_stats(&mut self) {
+                for s in &mut self.__stage_stats {
+                    s.ran = 0;
+                    s.skipped = 0;
+                    s.time = ::std::time::Duration::ZERO;
+                }
+                self.__stats_since = ::core::option::Option::Some(::std::time::Instant::now());
+            }
+            /// Monotonic time since the last `reset_stats` (`None` if never reset).
+            pub fn stats_age(&self) -> ::core::option::Option<::std::time::Duration> {
+                self.__stats_since.map(|t| t.elapsed())
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     // `constructor = "manual"` suppresses the generated `new()`/`Default` so the
     // caller can write their own (e.g. for a field whose type is not `Default`).
     let new_fn = if constructor_manual {
@@ -642,6 +732,7 @@ fn generate_impl(
                 Self {
                     pipeline_vars: [#(#pipeline_vars_init),*],
                     #(#constructor_inits,)*
+                    #stats_init
                     #phantom_init
                 }
             }
@@ -726,6 +817,8 @@ fn generate_impl(
                     Ok(())
                 }
 
+                #stats_methods
+
                 pub fn puml_diagram() -> &'static str {
                     #puml_literal
                 }
@@ -763,6 +856,8 @@ fn generate_impl(
                     #(#reset_calls)*
                     Ok(())
                 }
+
+                #stats_methods
 
                 pub fn puml_diagram() -> &'static str {
                     #puml_literal
@@ -818,6 +913,7 @@ fn is_result_of_controlflow(ty: &Type) -> bool {
     false
 }
 
+#[allow(clippy::too_many_arguments)]
 fn generate_compute_calls(
     stages: &[ItemFn],
     context_names: &[Ident],
@@ -826,7 +922,15 @@ fn generate_compute_calls(
     external_names: &[Ident],
     break_ty: Option<&Type>,
     reset_on_break: bool,
+    stats: bool,
 ) -> syn::Result<Vec<proc_macro2::TokenStream>> {
+    // Stage name -> its index into `__stage_stats` (module/registration order),
+    // matching the init order built in `generate_impl`.
+    let stage_index: HashMap<String, usize> = stages
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.sig.ident.to_string(), i))
+        .collect();
     // Maps pipeline field -> stage that writes it
     let mut var_writers: HashMap<String, Ident> = HashMap::new();
     // Track span of each writer parameter for better unused-output errors
@@ -1176,7 +1280,57 @@ fn generate_compute_calls(
             }
         };
 
-        compute_calls.push(call);
+        // Wrap with an optional skip guard (`#[stage(skip_when_clean)]`) and
+        // optional stats recording (`#[pipeline(stats)]`).
+        let ix = stage_index[&stage_name.to_string()];
+
+        // `ran += 1` is recorded before the call so a stage that early-returns
+        // (ControlFlow::Break) still counts as run; `time` is added after.
+        let recorded = if stats {
+            quote! {
+                if self.__stats_enabled {
+                    self.__stage_stats[#ix].ran += 1;
+                    let __t = ::std::time::Instant::now();
+                    #call
+                    self.__stage_stats[#ix].time += __t.elapsed();
+                } else {
+                    #call
+                }
+            }
+        } else {
+            quote! { #call }
+        };
+
+        let wrapped = if stage_is_skip_when_clean(stage) {
+            let dirty = dirty_check_idents(stage, context_names, constructor_args);
+            if dirty.is_empty() {
+                return Err(syn::Error::new(
+                    stage.sig.ident.span(),
+                    format!(
+                        "#[stage(skip_when_clean)] stage '{}' reads no dirty-trackable input \
+                         (only args/context); it would never run",
+                        stage.sig.ident
+                    ),
+                ));
+            }
+            let checks = dirty.iter().map(|f| quote! { self.#f.is_updated() });
+            let skip_record = if stats {
+                quote! { if self.__stats_enabled { self.__stage_stats[#ix].skipped += 1; } }
+            } else {
+                quote! {}
+            };
+            quote! {
+                if #(#checks)||* {
+                    #recorded
+                } else {
+                    #skip_record
+                }
+            }
+        } else {
+            recorded
+        };
+
+        compute_calls.push(wrapped);
     }
 
     Ok(compute_calls)
@@ -1190,6 +1344,60 @@ fn is_result_type(ty: &Type) -> bool {
         return segment.ident == "Result";
     }
     false
+}
+
+/// Whether a stage fn is marked `#[stage(skip_when_clean)]`.
+fn stage_is_skip_when_clean(func: &ItemFn) -> bool {
+    func.attrs.iter().any(|attr| {
+        if !is_stage_attr(attr) {
+            return false;
+        }
+        let mut found = false;
+        let _ = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("skip_when_clean") {
+                found = true;
+            }
+            Ok(())
+        });
+        found
+    })
+}
+
+/// Read-input fields whose dirtiness gates a `skip_when_clean` stage: every `&T`
+/// input that is a slot (internal or external), excluding `args` (plain `T`, no
+/// dirty bit) and context. Respects `#[rename]`.
+fn dirty_check_idents(
+    stage: &ItemFn,
+    context_names: &[Ident],
+    constructor_args: &[Ident],
+) -> Vec<Ident> {
+    let mut out: Vec<Ident> = Vec::new();
+    for input in &stage.sig.inputs {
+        if let FnArg::Typed(PatType { attrs, pat, ty, .. }) = input
+            && let syn::Pat::Ident(pat_ident) = &**pat
+        {
+            let target = normalized_target_ident(attrs, &pat_ident.ident);
+            if context_names.contains(&target) {
+                continue;
+            }
+            // Only read inputs (&T); &mut (outputs / #[state]) aren't triggers.
+            let is_mut = matches!(
+                &**ty,
+                Type::Reference(syn::TypeReference { mutability, .. }) if mutability.is_some()
+            );
+            if is_mut {
+                continue;
+            }
+            // args are plain `T` constants — no dirty bit to check.
+            if constructor_args.contains(&target) {
+                continue;
+            }
+            if !out.contains(&target) {
+                out.push(target);
+            }
+        }
+    }
+    out
 }
 
 /// Collects the field names of `#[state]` parameters (`&mut T` carrying
