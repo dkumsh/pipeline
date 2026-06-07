@@ -16,6 +16,10 @@ fn graph_named_carries_name_to_pipeline() {
 }
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "html_diagram() stamps wall-clock time via chrono (clock_gettime), unavailable under Miri isolation"
+)]
 fn html_diagram_renders_runtime_graph() {
     let mut g = Graph::named("RuntimeDiagram");
     let input = g.arg("input", 7u32);

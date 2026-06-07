@@ -8,122 +8,109 @@ pub mod vector;
 pub use buckets::Buckets;
 pub use vector::Vector;
 
-/// The state of a [`Value`] cell.
-///
-/// `Updated` is set on write and demoted to `Value` by [`Reset`] (so "updated
-/// this cycle" is distinct from "holds a value"); `Uninitialised` holds nothing.
-#[derive(Default, Debug, PartialEq)]
-pub enum State<T> {
-    /// No value held (or explicitly invalidated).
-    #[default]
-    Uninitialised,
-    /// Holds a value that was not written this cycle.
-    Value(T),
-    /// Holds a value written this cycle (dirty).
-    Updated(T),
-}
-
 /// A single dirty/validity-tracked value — the scalar analogue of one
-/// [`Vector`] slot.
+/// [`Vector`] slot. State is **two orthogonal bits**, exactly like a `Vector`
+/// slot's separate validity + dirty bitsets:
+///
+/// - **valid** — does it currently hold a value? (`value.is_some()`)
+/// - **dirty** — did it change *this cycle* (written **or** invalidated)?
+///
+/// The initial state is simply *invalid + clean*; there is no distinct
+/// "uninitialised" concept (that's also where a cell lands after `invalidate`
+/// then [`Reset`]). A valid→invalid transition sets the dirty bit, so the
+/// "became invalid" signal propagates just like a write — exactly as
+/// [`Vector::invalidate`] marks a slot dirty. [`Reset`] clears the dirty bit;
+/// validity persists.
 #[derive(Default)]
 pub struct Value<T> {
-    state: State<T>,
+    value: Option<T>,
+    dirty: bool,
 }
 
 impl<T> Value<T> {
-    /// Create an empty (`Uninitialised`) cell.
+    /// Create an empty (invalid, clean) cell.
     pub fn new() -> Self {
         Value {
-            state: State::Uninitialised,
+            value: None,
+            dirty: false,
         }
     }
 
-    /// Store `value` and mark the cell updated (dirty) this cycle.
+    /// Store `value` and mark the cell dirty this cycle.
     pub fn set(&mut self, value: T) {
-        self.state = State::Updated(value);
+        self.value = Some(value);
+        self.dirty = true;
     }
 
-    /// Borrow the value, or `Err(UninitialisedValue)` if there is none.
+    /// Borrow the value, or `Err(UninitialisedValue)` if the cell is invalid.
     pub fn get(&self) -> Result<&T, Error> {
-        match &self.state {
-            State::Value(v) | State::Updated(v) => Ok(v),
-            State::Uninitialised => Err(Error::UninitialisedValue),
-        }
+        self.value.as_ref().ok_or(Error::UninitialisedValue)
     }
 
-    /// Mutably borrow the value, or `Err(UninitialisedValue)` if there is none.
+    /// Mutably borrow the value, or `Err(UninitialisedValue)` if invalid.
     pub fn get_mut(&mut self) -> Result<&mut T, Error> {
-        match &mut self.state {
-            State::Value(v) | State::Updated(v) => Ok(v),
-            State::Uninitialised => Err(Error::UninitialisedValue),
-        }
+        self.value.as_mut().ok_or(Error::UninitialisedValue)
     }
 
-    /// Re-mark an existing value as updated (dirty) without changing it. No-op
-    /// if the cell is uninitialised or already updated.
+    /// Re-mark an existing value as dirty without changing it. No-op if the
+    /// cell is invalid.
     pub fn touch(&mut self) {
-        if let State::Value(_) = self.state
-            && let State::Value(v) = std::mem::replace(&mut self.state, State::Uninitialised)
-        {
-            self.state = State::Updated(v);
+        if self.value.is_some() {
+            self.dirty = true;
         }
     }
 
-    /// Whether the value was written this cycle (state is `Updated`).
+    /// Whether the cell changed this cycle — written **or** invalidated. This
+    /// is the dirty bit the pipeline engines use, so a valid→invalid transition
+    /// counts as a change.
     pub fn is_updated(&self) -> bool {
-        matches!(self.state, State::Updated(_))
+        self.dirty
     }
 
-    /// Whether the cell currently holds a value (`Value` or `Updated`).
+    /// Whether the cell currently holds a value.
     pub fn has_value(&self) -> bool {
-        !matches!(self.state, State::Uninitialised)
+        self.value.is_some()
     }
 
-    /// Option-shaped alias for [`Value::get`] / [`Value::has_value`] that
-    /// mirrors [`crate::value::vector::Vector::get_valid`]. Returns `Some`
-    /// iff the value is currently valid (state is `Value(_)` or
-    /// `Updated(_)`), `None` if uninitialised or explicitly invalidated.
+    /// Option-shaped accessor mirroring
+    /// [`crate::value::vector::Vector::get_valid`]: `Some` iff the cell
+    /// currently holds a value, else `None`.
     pub fn get_valid(&self) -> Option<&T> {
-        match &self.state {
-            State::Value(v) | State::Updated(v) => Some(v),
-            State::Uninitialised => None,
-        }
+        self.value.as_ref()
     }
 
-    /// Mirror of [`Value::has_value`] under the validity-aware naming used
-    /// by [`crate::value::vector::Vector::is_valid`]. Returns `true` iff the
-    /// state is `Value(_)` or `Updated(_)`.
+    /// Mirror of [`Value::has_value`] under the validity-aware naming used by
+    /// [`crate::value::vector::Vector::is_valid`].
     pub fn is_valid(&self) -> bool {
-        self.has_value()
+        self.value.is_some()
     }
 
-    /// Explicit invalidation: drop the stored value and return the `Value`
-    /// to the `Uninitialised` state. Mirrors
-    /// [`crate::value::vector::Vector::invalidate`]. Producers should call
-    /// this when an upstream input is bad and they want downstream readers
-    /// to see "no fresh / valid data" instead of held-last-cycle data.
+    /// Explicit invalidation: drop the stored value. A valid→invalid transition
+    /// is a **change**, so it marks the cell dirty this cycle — mirroring
+    /// [`crate::value::vector::Vector::invalidate`]. This lets the "became
+    /// invalid" signal propagate to readers that schedule on dirtiness, instead
+    /// of looking unchanged. Invalidating an already-empty cell is a no-op (no
+    /// spurious dirty). Producers call this when an upstream input is bad and
+    /// they want downstream readers to see "no fresh / valid data" instead of
+    /// held-last-cycle data.
     pub fn invalidate(&mut self) {
-        self.state = State::Uninitialised;
+        if self.value.take().is_some() {
+            self.dirty = true;
+        }
     }
 }
 
 impl<T> Reset for Value<T> {
     type Error = Error;
     fn reset(&mut self) -> Result<(), Error> {
-        if let State::Updated(_) = self.state
-            && let State::Updated(v) = std::mem::replace(&mut self.state, State::Uninitialised)
-        {
-            self.state = State::Value(v);
-        }
+        // Clear the per-cycle dirty bit; validity (the held value) persists.
+        self.dirty = false;
         Ok(())
     }
 }
 impl<T: PartialEq> PartialEq<T> for Value<T> {
     fn eq(&self, other: &T) -> bool {
-        match &self.state {
-            State::Uninitialised => false,
-            State::Value(v) | State::Updated(v) => v.eq(other),
-        }
+        self.value.as_ref().is_some_and(|v| v == other)
     }
 }
 
@@ -218,11 +205,35 @@ mod tests {
         assert!(value.is_updated());
     }
 
+    /// Mirrors `Vector::validity_invalidate_marks_dirty_and_clears_valid`: a
+    /// valid->invalid transition is a change, so it sets the dirty bit and the
+    /// signal survives until `reset`.
     #[test]
-    fn invalidate_on_uninitialised_is_idempotent() {
+    fn invalidate_marks_dirty_and_clears_valid() {
+        let mut value: Value<i32> = Value::new();
+        value.set(42);
+        value.reset().unwrap(); // valid but clean (Value state)
+        assert!(value.is_valid());
+        assert!(!value.is_updated());
+
+        value.invalidate();
+        assert!(!value.is_valid()); // no longer holds a value
+        assert!(value.is_updated()); // ...but dirty this cycle (Invalidated)
+        assert_eq!(value.get_valid(), None);
+
+        // reset settles the invalidation to a clean, empty cell.
+        value.reset().unwrap();
+        assert!(!value.is_valid());
+        assert!(!value.is_updated());
+    }
+
+    #[test]
+    fn invalidate_on_uninitialised_is_idempotent_and_clean() {
         let mut value: Value<i32> = Value::new();
         value.invalidate();
         value.invalidate();
         assert!(!value.is_valid());
+        // Invalidating an already-empty cell is not a change -> not dirty.
+        assert!(!value.is_updated());
     }
 }

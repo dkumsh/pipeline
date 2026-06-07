@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `pipeline-core`: `Value` now tracks **two orthogonal bits** — validity
+  (`Option<T>`) and dirtiness — mirroring a `Vector` slot, instead of the old
+  three/four-way `State` enum (the public `State` type is removed; nothing in
+  the API surfaced it). Consequently `Value::invalidate()` now marks the cell
+  **dirty** (`is_updated()` reports the valid→invalid transition), matching
+  `Vector::invalidate`, so a "became invalid" signal propagates to readers that
+  schedule on dirtiness. `reset()` just clears the dirty bit (validity persists);
+  invalidating an already-empty cell stays a no-op (no spurious dirty).
+
 ## [0.7.0] - 2026-06-07
 
 ### Changed
