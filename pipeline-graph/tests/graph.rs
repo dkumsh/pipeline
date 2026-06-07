@@ -360,3 +360,154 @@ fn high_arity_stage() {
     p.compute().unwrap();
     assert_eq!(p.get(out).get_valid(), Some(&15));
 }
+
+// === skip_when_clean scheduling + per-stage stats ===
+
+use std::cell::Cell;
+use std::rc::Rc;
+
+#[test]
+fn skip_when_clean_runs_only_on_dirty_input() {
+    // Miri-safe (no stats, so no clock): a captured Rc<Cell> counts runs — also
+    // the closure-capture idiom that is the graph's analogue of #[state].
+    let runs = Rc::new(Cell::new(0u32));
+    let mut g = Graph::named("SkipBehaviour");
+    let input = g.slot::<Value<u32>>("input");
+    let output = g.slot::<Value<u32>>("output");
+    g.external(input);
+    let runs_c = Rc::clone(&runs);
+    g.stage_skip_when_clean(
+        "double",
+        (Input(input), Output(output)),
+        move |i: &Value<u32>, o: &mut Value<u32>| {
+            runs_c.set(runs_c.get() + 1);
+            o.set(*i.get_valid().expect("valid when run") * 2);
+            Ok(Flow::Continue)
+        },
+    );
+    let mut p = g.build().expect("valid graph");
+
+    p.get_mut(input).set(10);
+    p.compute().unwrap(); // dirty -> run
+    p.compute().unwrap(); // clean -> skip
+    p.compute().unwrap(); // clean -> skip
+    p.get_mut(input).set(5);
+    p.compute().unwrap(); // dirty -> run
+
+    assert_eq!(runs.get(), 2);
+    assert_eq!(p.get(output).get_valid(), Some(&10));
+}
+
+#[test]
+fn invalidation_wakes_skip_when_clean_consumer() {
+    // A valid->invalid transition is dirty, so a skip_when_clean consumer is
+    // scheduled and sees the now-invalid input; an unchanged cycle skips.
+    let runs = Rc::new(Cell::new(0u32));
+    let mut g = Graph::named("Invalidate");
+    let input = g.slot::<Value<u32>>("input");
+    let saw_invalid = g.slot::<Value<bool>>("saw_invalid");
+    g.external(input);
+    let runs_c = Rc::clone(&runs);
+    g.stage_skip_when_clean(
+        "watch",
+        (Input(input), Output(saw_invalid)),
+        move |i: &Value<u32>, s: &mut Value<bool>| {
+            runs_c.set(runs_c.get() + 1);
+            s.set(i.get_valid().is_none());
+            Ok(Flow::Continue)
+        },
+    );
+    let mut p = g.build().expect("valid graph");
+
+    p.get_mut(input).set(7);
+    p.compute().unwrap(); // dirty -> run, input valid
+    assert_eq!(p.get(saw_invalid).get_valid(), Some(&false));
+
+    p.get_mut(input).invalidate();
+    p.compute().unwrap(); // became invalid -> dirty -> run, input invalid
+    assert_eq!(p.get(saw_invalid).get_valid(), Some(&true));
+
+    p.compute().unwrap(); // unchanged -> skip
+
+    assert_eq!(runs.get(), 2); // ran on set and on invalidate; skipped the quiet cycle
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "stats timing uses Instant (clock_gettime), unavailable under Miri isolation"
+)]
+fn stats_record_runs_and_skips_and_are_off_by_default() {
+    let mut g = Graph::named("Stats");
+    let input = g.slot::<Value<u32>>("input");
+    let output = g.slot::<Value<u32>>("output");
+    g.external(input);
+    g.stage_skip_when_clean(
+        "double",
+        (Input(input), Output(output)),
+        |i: &Value<u32>, o: &mut Value<u32>| {
+            o.set(*i.get_valid().unwrap() * 2);
+            Ok(Flow::Continue)
+        },
+    );
+    let mut p = g.build().expect("valid graph");
+
+    // Off by default: counters stay zero even though the stage runs/skips.
+    p.get_mut(input).set(1);
+    p.compute().unwrap();
+    p.compute().unwrap();
+    assert_eq!(p.stats()[0].ran, 0);
+    assert_eq!(p.stats()[0].skipped, 0);
+
+    // Enabled: counts run vs skip.
+    p.collect_stats(true);
+    p.get_mut(input).set(2);
+    p.compute().unwrap(); // run
+    p.compute().unwrap(); // skip
+    p.compute().unwrap(); // skip
+    let s = &p.stats()[0];
+    assert_eq!(s.name, "double");
+    assert_eq!(s.ran, 1);
+    assert_eq!(s.skipped, 2);
+}
+
+#[test]
+#[cfg_attr(
+    miri,
+    ignore = "reset_stats/stats_age use Instant (clock_gettime), unavailable under Miri isolation"
+)]
+fn reset_stats_zeros_counters_and_starts_window() {
+    let mut g = Graph::named("ResetStats");
+    let input = g.slot::<Value<u32>>("input");
+    let output = g.slot::<Value<u32>>("output");
+    g.external(input);
+    g.stage_skip_when_clean(
+        "double",
+        (Input(input), Output(output)),
+        |i: &Value<u32>, o: &mut Value<u32>| {
+            o.set(*i.get_valid().unwrap() * 2);
+            Ok(Flow::Continue)
+        },
+    );
+    let mut p = g.build().expect("valid graph");
+
+    // No window until the first reset.
+    assert!(p.stats_age().is_none());
+
+    p.collect_stats(true);
+    p.reset_stats();
+    assert!(p.stats_age().is_some());
+
+    p.get_mut(input).set(1);
+    p.compute().unwrap(); // run
+    p.compute().unwrap(); // skip
+    assert_eq!(p.stats()[0].ran, 1);
+    assert_eq!(p.stats()[0].skipped, 1);
+
+    // Reset zeros the counters and restarts the window.
+    p.reset_stats();
+    assert_eq!(p.stats()[0].ran, 0);
+    assert_eq!(p.stats()[0].skipped, 0);
+    assert_eq!(p.stats()[0].time, std::time::Duration::ZERO);
+    assert!(p.stats_age().is_some());
+}

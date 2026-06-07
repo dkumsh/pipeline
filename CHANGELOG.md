@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `pipeline-graph`: opt-in **demand-driven scheduling**. `Graph::stage_skip_when_clean`
+  registers a stage the engine may skip in any cycle where none of its declared
+  `Input` slots changed (`is_updated()`); a skipped stage doesn't run and doesn't
+  write, so "unchanged" propagates to dependents (and a valid→invalid transition,
+  now dirty, wakes consumers). The body must be a pure function of its declared
+  inputs. Plain `Graph::stage` is unchanged (always runs).
+- `pipeline-graph`: optional per-stage stats. `Pipeline::collect_stats(bool)`
+  toggles collection (off by default — no counter writes, no clock reads on the
+  hot path; `compute` monomorphizes into a stats / no-stats flavor), and
+  `Pipeline::stats() -> &[StageStats]` returns a borrowed slice (no per-call
+  allocation) of per-stage `{ name, ran, skipped, time }` in registration order.
+  `Pipeline::reset_stats()` zeroes the counters and starts a fresh window;
+  `Pipeline::stats_age()` reports the monotonic time since that reset (for
+  turning counts into rates / utilization).
+- `pipeline-core`: `Updated` trait (`is_updated()`) — the read-side mirror of
+  `Reset`, implemented by `Value` / `Vector` / `Buckets`, letting an engine query
+  dirtiness generically.
+
 ### Changed
 
 - `pipeline-core`: `Value` now tracks **two orthogonal bits** — validity

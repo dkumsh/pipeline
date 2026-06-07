@@ -71,6 +71,32 @@ let json = p.diagram_json();
 p.write_html_to_file("target/graph/runtime_graph.html")?;
 ```
 
+### Demand-driven scheduling (opt-in)
+
+By default every stage runs each `compute()`. Register a stage with
+`Graph::stage_skip_when_clean(...)` instead and the engine **skips it in any
+cycle where none of its declared `Input` slots changed** (`is_updated()`). A
+skipped stage doesn't run and doesn't write, so the "unchanged" status
+propagates to its dependents — and because `Value`/`Vector` mark a value→invalid
+transition dirty, a *becoming-invalid* input wakes its consumers too. The body
+must be a **pure function of its declared inputs** (per-stage private state is
+fine — capture it in the closure, the runtime analogue of `#[state]`); don't mark
+a stage skippable if it has must-run side effects or is a source with no dirty
+input to trigger it.
+
+```rust
+g.stage_skip_when_clean("refine", (Input(src), Output(dst)),
+    |s: &Vector<u32>, d: &mut Vector<u32>| { /* recompute from s */ Ok(Flow::Continue) });
+```
+
+Optionally measure it: `p.collect_stats(true)` turns on per-stage counters
+(off by default — no overhead, no clock reads otherwise), and `p.stats()` returns
+a borrowed `&[StageStats]` (`{ name, ran, skipped, time }`, registration order) —
+a zero-work slice you can cheaply poll from your loop to see how often each stage
+actually does work. `p.reset_stats()` zeroes the counters and starts a fresh
+window; `p.stats_age()` gives the monotonic time since that reset, so you can turn
+counts into rates (`stage.ran / age`) or utilization (`stage.time / age`).
+
 ### Interactive HTML diagram
 
 `write_html_to_file` renders the live graph as a standalone, self-contained

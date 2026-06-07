@@ -151,6 +151,12 @@ impl<T> Reset for Buckets<T> {
     }
 }
 
+impl<T> crate::Updated for Buckets<T> {
+    fn is_updated(&self) -> bool {
+        self.is_updated() // inherent method (preferred over the trait method)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -32,3 +32,11 @@ pub trait Reset {
     /// Clear per-cycle dirty state.
     fn reset(&mut self) -> Result<(), Self::Error>;
 }
+
+/// Query a value's **per-cycle dirty state**: whether it changed this cycle
+/// (written *or* invalidated). The pipeline engines use this to decide whether a
+/// stage has any fresh input. The read-side mirror of [`Reset`].
+pub trait Updated {
+    /// Whether the value changed this cycle.
+    fn is_updated(&self) -> bool;
+}

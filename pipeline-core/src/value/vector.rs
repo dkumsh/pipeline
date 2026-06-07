@@ -456,6 +456,12 @@ impl<V> Reset for Vector<V> {
     }
 }
 
+impl<V> crate::Updated for Vector<V> {
+    fn is_updated(&self) -> bool {
+        self.is_updated() // inherent method (preferred over the trait method)
+    }
+}
+
 /// A one-shot, must-use writer for a single slot in a [`Vector`].
 ///
 /// Acquired by [`Vector::slot_writer`]. Consume by exactly one of

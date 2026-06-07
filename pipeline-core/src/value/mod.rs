@@ -108,6 +108,12 @@ impl<T> Reset for Value<T> {
         Ok(())
     }
 }
+
+impl<T> crate::Updated for Value<T> {
+    fn is_updated(&self) -> bool {
+        self.is_updated() // inherent method (preferred over the trait method)
+    }
+}
 impl<T: PartialEq> PartialEq<T> for Value<T> {
     fn eq(&self, other: &T) -> bool {
         self.value.as_ref().is_some_and(|v| v == other)

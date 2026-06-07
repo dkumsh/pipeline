@@ -28,6 +28,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
 use std::marker::PhantomData;
 use std::ptr::NonNull;
+use std::time::{Duration, Instant};
 
 use pipeline::{Error, Reset};
 use pipeline_diagram::{Edge, Group, Node};
@@ -35,7 +36,7 @@ use pipeline_diagram::{Edge, Group, Node};
 // Re-export the value layer so a single `pipeline-graph` dependency suffices
 // (`pipeline_graph::Vector`). The same types are available under the shared
 // `pipeline::` name if you also depend on `pipeline-core` directly.
-pub use pipeline::{Buckets, Value, Vector, value};
+pub use pipeline::{Buckets, Updated, Value, Vector, value};
 
 // ---------------------------------------------------------------------------
 // Slots
@@ -80,6 +81,9 @@ struct DataNode {
     drop: unsafe fn(NonNull<u8>),
     /// `Reset::reset` glue for the concrete `T` (no-op for [`Role::Arg`]).
     reset: unsafe fn(NonNull<u8>) -> Result<(), Error>,
+    /// `Updated::is_updated` glue for the concrete `T` — whether the node
+    /// changed this cycle. Always `false` for [`Role::Arg`] (constants).
+    is_updated: unsafe fn(NonNull<u8>) -> bool,
     role: Role,
     /// Stage that writes this node, assigned during `build()`.
     writer: Option<usize>,
@@ -108,6 +112,16 @@ unsafe fn reset_glue<T: Reset<Error = Error>>(p: NonNull<u8>) -> Result<(), Erro
 /// Reset glue for [`Role::Arg`] nodes, whose `T` need not be `Reset`.
 fn noop_reset(_: NonNull<u8>) -> Result<(), Error> {
     Ok(())
+}
+
+unsafe fn updated_glue<T: Updated>(p: NonNull<u8>) -> bool {
+    unsafe { (*p.cast::<T>().as_ptr()).is_updated() }
+}
+
+/// Dirtiness glue for [`Role::Arg`] nodes (constants): never dirty, and `T`
+/// need not be `Updated`.
+fn never_updated(_: NonNull<u8>) -> bool {
+    false
 }
 
 /// Opaque, append-only collection of nodes. Public only because it appears in
@@ -361,6 +375,9 @@ struct StageDef {
     name: String,
     ports: Vec<(u32, Access)>,
     runner: Runner,
+    /// If set, the engine may skip this stage in cycles where none of its
+    /// declared inputs changed (see [`Graph::stage_skip_when_clean`]).
+    skip_when_clean: bool,
 }
 
 /// Runtime builder for a pipeline graph.
@@ -396,7 +413,7 @@ impl Graph {
     /// so the engine can clear its per-cycle dirty state.
     pub fn slot<T>(&mut self, name: &str) -> Slot<T>
     where
-        T: Default + Reset<Error = Error> + 'static,
+        T: Default + Reset<Error = Error> + Updated + 'static,
     {
         let raw = Box::into_raw(Box::<T>::default());
         let ptr = unsafe { NonNull::new_unchecked(raw as *mut u8) };
@@ -405,6 +422,7 @@ impl Graph {
             ptr,
             drop: drop_glue::<T>,
             reset: reset_glue::<T>,
+            is_updated: updated_glue::<T>,
             role: Role::Internal,
             writer: None,
             name: name.to_string(),
@@ -426,6 +444,7 @@ impl Graph {
             ptr,
             drop: drop_glue::<T>,
             reset: noop_reset,
+            is_updated: never_updated,
             role: Role::Arg,
             writer: None,
             name: name.to_string(),
@@ -450,8 +469,33 @@ impl Graph {
 
     /// Register a stage. `ports` is a tuple of `Input`/`Output`; `body` is a
     /// closure or free function taking the matching references as **separate
-    /// arguments** (like a static `#[stage]`), chosen at runtime.
+    /// arguments** (like a static `#[stage]`), chosen at runtime. The stage runs
+    /// every `compute()`.
     pub fn stage<P, S>(&mut self, name: &str, ports: P, body: S)
+    where
+        P: Ports + 'static,
+        S: IntoStage<P>,
+    {
+        self.push_stage(name, ports, body, false);
+    }
+
+    /// Register a stage the engine **may skip** in any cycle where none of its
+    /// declared `Input` slots changed (`is_updated()`). The body must be a
+    /// **pure function of its declared inputs** (run-gated `#[state]`-style
+    /// captures are fine): when skipped it does not run and its outputs are not
+    /// written, so "nothing changed" stays clean and the skip propagates to
+    /// dependents. Do not mark a stage skippable if it has side effects that must
+    /// happen every cycle, or if it must emit a value to bootstrap consumers
+    /// (such a source has no dirty input to trigger it).
+    pub fn stage_skip_when_clean<P, S>(&mut self, name: &str, ports: P, body: S)
+    where
+        P: Ports + 'static,
+        S: IntoStage<P>,
+    {
+        self.push_stage(name, ports, body, true);
+    }
+
+    fn push_stage<P, S>(&mut self, name: &str, ports: P, body: S, skip_when_clean: bool)
     where
         P: Ports + 'static,
         S: IntoStage<P>,
@@ -462,6 +506,7 @@ impl Graph {
             name: name.to_string(),
             ports: meta,
             runner,
+            skip_when_clean,
         });
     }
 
@@ -542,11 +587,27 @@ impl Graph {
             return Err(GraphError::Cycle);
         }
 
+        // Contiguous per-stage stats (registration order), so `stats()` can hand
+        // back a `&[StageStats]` with no per-call work. Names are cloned once here.
+        let stage_stats = self
+            .stages
+            .iter()
+            .map(|s| StageStats {
+                name: s.name.clone(),
+                ran: 0,
+                skipped: 0,
+                time: Duration::ZERO,
+            })
+            .collect();
+
         Ok(Pipeline {
             name: self.name,
             store: self.store,
             stages: self.stages,
             order,
+            stage_stats,
+            stats_enabled: false,
+            stats_since: None,
         })
     }
 }
@@ -561,6 +622,35 @@ pub struct Pipeline {
     store: Store,
     stages: Vec<StageDef>,
     order: Vec<usize>,
+    /// Per-stage stats in registration order (parallel to `stages`), so
+    /// [`Pipeline::stats`] returns a `&[StageStats]` with no per-call work.
+    stage_stats: Vec<StageStats>,
+    /// When set, `compute()` records per-stage [`StageStats`] (run/skip counts +
+    /// timing). Off by default so the hot path does no counter writes or clock
+    /// reads.
+    stats_enabled: bool,
+    /// Monotonic start of the current stats window, stamped by
+    /// [`Pipeline::reset_stats`]. `None` until the first reset (so `build()`
+    /// reads no clock). Powers [`Pipeline::stats_age`] for rate/utilization math.
+    stats_since: Option<Instant>,
+}
+
+/// Per-stage execution counters gathered by `compute()` while stats collection
+/// is enabled (see [`Pipeline::collect_stats`]). Stored contiguously and handed
+/// out by reference via [`Pipeline::stats`] (`&[StageStats]`), so reading them
+/// costs nothing regardless of how this struct grows.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct StageStats {
+    /// Stage name.
+    pub name: String,
+    /// Number of cycles the stage actually ran.
+    pub ran: u64,
+    /// Number of cycles the stage was skipped because no input was dirty
+    /// (only possible for stages registered via
+    /// [`Graph::stage_skip_when_clean`]).
+    pub skipped: u64,
+    /// Total wall-clock time spent running the stage.
+    pub time: Duration,
 }
 
 impl Pipeline {
@@ -571,10 +661,41 @@ impl Pipeline {
 
     /// Run all stages in topological order, then clear the per-cycle dirty state
     /// of every written and external slot — exactly the static `compute()`.
+    ///
+    /// A stage registered via [`Graph::stage_skip_when_clean`] is skipped in any
+    /// cycle where none of its declared inputs changed; a skipped stage doesn't
+    /// run and doesn't write, so the "unchanged" status propagates to dependents.
     pub fn compute(&mut self) -> Result<(), Error> {
+        // Monomorphize two flavors: the stats path records counters + timing,
+        // the default path does neither (no counter writes, no clock reads).
+        if self.stats_enabled {
+            self.run::<true>()
+        } else {
+            self.run::<false>()
+        }
+    }
+
+    fn run<const STATS: bool>(&mut self) -> Result<(), Error> {
         for i in 0..self.order.len() {
             let ix = self.order[i];
-            match (self.stages[ix].runner)(&self.store)? {
+            // The skip decision is unconditional behaviour; only the recording
+            // is gated by STATS (compiled away when false).
+            if self.stages[ix].skip_when_clean && !self.stage_inputs_dirty(ix) {
+                if STATS {
+                    self.stage_stats[ix].skipped += 1;
+                }
+                continue;
+            }
+            let flow = if STATS {
+                let start = Instant::now();
+                let flow = (self.stages[ix].runner)(&self.store)?;
+                self.stage_stats[ix].time += start.elapsed();
+                self.stage_stats[ix].ran += 1;
+                flow
+            } else {
+                (self.stages[ix].runner)(&self.store)?
+            };
+            match flow {
                 Flow::Continue => {}
                 Flow::Break => break,
             }
@@ -586,6 +707,56 @@ impl Pipeline {
             }
         }
         Ok(())
+    }
+
+    /// Whether any of stage `six`'s declared inputs changed this cycle.
+    fn stage_inputs_dirty(&self, six: usize) -> bool {
+        self.stages[six].ports.iter().any(|&(id, acc)| {
+            acc == Access::Input && {
+                let node = &self.store.nodes[id as usize];
+                // SAFETY: node holds `T`; is_updated glue matches that `T`.
+                unsafe { (node.is_updated)(node.ptr) }
+            }
+        })
+    }
+
+    /// Enable or disable per-stage stats collection (run/skip counts + timing).
+    /// **Off by default**: when off, `compute()` writes no counters and reads no
+    /// clock. Returns `&mut self` for chaining.
+    pub fn collect_stats(&mut self, enable: bool) -> &mut Self {
+        self.stats_enabled = enable;
+        self
+    }
+
+    /// Per-stage counters in registration order, accumulated across `compute()`
+    /// calls made while [`Pipeline::collect_stats`] was enabled. `time` is the
+    /// total wall-clock spent running each stage.
+    ///
+    /// Returns a borrowed slice — no allocation, no per-call work — so it's cheap
+    /// to poll from a `compute()` loop.
+    pub fn stats(&self) -> &[StageStats] {
+        &self.stage_stats
+    }
+
+    /// Zero every stage's counters and start a fresh measurement window (stamps
+    /// a monotonic instant for [`Pipeline::stats_age`]). Independent of
+    /// [`Pipeline::collect_stats`]: call it to begin/restart a reporting window.
+    pub fn reset_stats(&mut self) {
+        for s in &mut self.stage_stats {
+            s.ran = 0;
+            s.skipped = 0;
+            s.time = Duration::ZERO;
+        }
+        self.stats_since = Some(Instant::now());
+    }
+
+    /// How long the current stats window has been accumulating (monotonic),
+    /// i.e. elapsed since the last [`Pipeline::reset_stats`]; `None` if never
+    /// reset. Combine with [`StageStats`] for rates / utilization, e.g.
+    /// `stage.ran as f64 / age.as_secs_f64()` or `stage.time.as_secs_f64() /
+    /// age.as_secs_f64()`.
+    pub fn stats_age(&self) -> Option<Duration> {
+        self.stats_since.map(|t| t.elapsed())
     }
 
     /// Read a slot between cycles (e.g. to inspect results).
