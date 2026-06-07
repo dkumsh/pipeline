@@ -45,7 +45,9 @@ fn pipeline_with_no_args_is_default() {
 
 #[test]
 fn state_can_be_seeded_after_new() {
-    // The state field is `pub`, so a caller can assign it post-construction.
+    // The state field is private, but reachable from the module that defines the
+    // pipeline (here, the test crate root), so in-crate code can seed it
+    // post-construction. Downstream crates cannot.
     let mut p = CounterPipeline::new();
     p.counter.calls = 40;
     p.compute().unwrap();

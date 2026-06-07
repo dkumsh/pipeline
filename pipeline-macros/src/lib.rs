@@ -91,8 +91,19 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
     let html_diagram = pipeline_diagram::render_html(&diagram_json)
         .expect("macro-generated diagram JSON is valid");
 
+    // Fields that must be private (not `pub`): constructor `args` and `#[state]`.
+    let mut private_fields: HashSet<String> =
+        constructor_args.iter().map(|i| i.to_string()).collect();
+    private_fields.extend(collect_state_names(&stages, context_names));
+
     // Generate the struct (context is not included)
-    let struct_def = generate_struct(&pipeline_name, pipeline_generics, &fields, &pipeline_vars);
+    let struct_def = generate_struct(
+        &pipeline_name,
+        pipeline_generics,
+        &fields,
+        &pipeline_vars,
+        &private_fields,
+    );
 
     // Generate the impl block
     let impl_block = generate_impl(
@@ -507,13 +518,25 @@ fn generate_struct(
     generics: Option<&syn::Generics>,
     fields: &[(Ident, Type)],
     pipeline_vars: &[String],
+    private_fields: &HashSet<String>,
 ) -> proc_macro2::TokenStream {
     let g = generics.cloned().unwrap_or_default();
     let (_impl_g, _ty_g, where_clause) = g.split_for_impl();
     let vars_len = pipeline_vars.len();
+    // `args` (constructor config) and `#[state]` (per-stage-private scratch) are
+    // pipeline-internal, so they're emitted *without* `pub`: stage bodies and the
+    // generated constructor reach them (same module), but downstream code can't.
+    // Stage outputs and `external` inputs stay `pub` so callers read results and
+    // feed inputs.
     let field_defs: Vec<TokenStream2> = fields
         .iter()
-        .map(|(ident, ty)| quote! { pub #ident: #ty })
+        .map(|(ident, ty)| {
+            if private_fields.contains(&ident.to_string()) {
+                quote! { #ident: #ty }
+            } else {
+                quote! { pub #ident: #ty }
+            }
+        })
         .collect();
 
     let (phantom_field, _phantom_init) = build_phantom_tokens(&g);
@@ -1167,6 +1190,31 @@ fn is_result_type(ty: &Type) -> bool {
         return segment.ident == "Result";
     }
     false
+}
+
+/// Collects the field names of `#[state]` parameters (`&mut T` carrying
+/// `#[state]`), respecting `#[rename]`. These become private struct fields.
+fn collect_state_names(stages: &[ItemFn], context_names: &[Ident]) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for stage in stages {
+        for input in &stage.sig.inputs {
+            if let FnArg::Typed(PatType { attrs, pat, ty, .. }) = input
+                && let syn::Pat::Ident(pat_ident) = &**pat
+            {
+                let target = normalized_target_ident(attrs, &pat_ident.ident);
+                if context_names.contains(&target) {
+                    continue;
+                }
+                if let Type::Reference(type_ref) = &**ty
+                    && type_ref.mutability.is_some()
+                    && has_state_attr(attrs)
+                {
+                    names.insert(target.to_string());
+                }
+            }
+        }
+    }
+    names
 }
 
 /// Collects the names of variables that are written (i.e. passed as `&mut`) in any stage.

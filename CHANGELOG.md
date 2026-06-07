@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `pipeline-dsl`: `args` (constructor config) and `#[state]` fields of the
+  generated struct are now **private** instead of `pub` — they're
+  pipeline-internal. Stage outputs and `external` inputs stay `pub`. In-crate
+  code (the module defining the pipeline) can still reach them, e.g. to seed
+  state post-`new()`; **potentially breaking** only for downstream crates that
+  read/wrote those fields.
 - `pipeline-core`: `Value` now tracks **two orthogonal bits** — validity
   (`Option<T>`) and dirtiness — mirroring a `Vector` slot, instead of the old
   three/four-way `State` enum (the public `State` type is removed; nothing in

@@ -81,6 +81,11 @@ A stage parameter is one **base kind** (where its storage lives and who fills it
 name), `#[skip_reset]` (a slot that persists instead of resetting), `#[unused]`
 (keep a parameter that's deliberately disconnected from the graph).
 
+**Field visibility.** Stage outputs and `external` inputs are `pub` (callers read
+results and feed inputs). `args` and `#[state]` are pipeline-internal, so they're
+**private** fields — reachable from the module that defines the pipeline (e.g. to
+seed state post-`new()`), but not by downstream crates.
+
 `#[state]` is the only off-graph kind: per-stage-private, persistent, plain `T`
 the pipeline owns and exactly one stage mutates — for an accumulator, cache, or
 scratch that must survive across cycles. It is never reset, never read by another
