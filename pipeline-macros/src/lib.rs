@@ -813,6 +813,9 @@ fn generate_compute_calls(
     let mut stage_infos: HashMap<Ident, StageInfo> = HashMap::new();
     let mut output_unused: HashSet<String> = HashSet::new();
     let mut input_unused: HashSet<String> = HashSet::new();
+    // `#[state]` fields: per-stage-private, persistent, plain-`T`. Maps the state
+    // field name -> the one stage that owns it. Not on the dataflow graph.
+    let mut state_owners: HashMap<String, Ident> = HashMap::new();
     // Fields declared as externally-fed in the pipeline header via `external = "..."`.
     let external_inputs: HashSet<String> = external_names.iter().map(|i| i.to_string()).collect();
 
@@ -835,6 +838,40 @@ fn generate_compute_calls(
                 let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
                 let var_name = target_ident.to_string();
                 let is_unused = has_unused_attr(attrs);
+
+                // `#[state]`: private, persistent, plain-`T` scratch owned by the
+                // pipeline and mutated by exactly one stage. It is *not* a dataflow
+                // slot, so it is kept out of var_writers/read_spans (exempt from the
+                // single-writer, missing-producer, and needs-a-reader rules) and out
+                // of the per-cycle reset.
+                if has_state_attr(attrs) {
+                    let is_mut_ref = matches!(
+                        &**ty,
+                        Type::Reference(syn::TypeReference { mutability, .. }) if mutability.is_some()
+                    );
+                    if !is_mut_ref {
+                        return Err(syn::Error::new(
+                            input.span(),
+                            format!(
+                                "#[state] parameter '{var_name}' must be `&mut T` \
+                                 (read-only state is just an argument)"
+                            ),
+                        ));
+                    }
+                    if let Some(other) = state_owners.get(&var_name) {
+                        return Err(syn::Error::new(
+                            input.span(),
+                            format!(
+                                "state '{var_name}' is shared between stages '{other}' and '{}' \
+                                 — state is private to one stage; use a Value<T> slot for shared \
+                                 mutable data",
+                                stage.sig.ident
+                            ),
+                        ));
+                    }
+                    state_owners.insert(var_name.clone(), stage.sig.ident.clone());
+                    continue;
+                }
 
                 match &**ty {
                     // &mut: writer
@@ -921,6 +958,55 @@ fn generate_compute_calls(
                 format!(
                     "variable '{}' is read but never produced by any stage or passed via constructor args/context",
                     read_var
+                ),
+            ));
+        }
+    }
+
+    // A `#[state]` name is private to its owning stage: it must not collide with
+    // a dataflow slot (read or written by any stage), nor with an arg / context /
+    // external name. Each such clash would otherwise silently share one struct
+    // field across incompatible roles.
+    for (state_name, owner) in &state_owners {
+        if let Some(writer) = var_writers.get(state_name) {
+            return Err(syn::Error::new(
+                writer_spans
+                    .get(state_name)
+                    .copied()
+                    .unwrap_or_else(Span::call_site),
+                format!(
+                    "state '{state_name}' (stage '{owner}') collides with a slot written by \
+                     stage '{writer}' — state is private to one stage; use a Value<T> slot for \
+                     shared mutable data"
+                ),
+            ));
+        }
+        if let Some(span) = read_spans.get(state_name) {
+            return Err(syn::Error::new(
+                *span,
+                format!(
+                    "state '{state_name}' (stage '{owner}') collides with a slot read by another \
+                     stage — state is private to one stage; use a Value<T> slot to share it"
+                ),
+            ));
+        }
+        let collides_with = if constructor_args
+            .iter()
+            .any(|a| &a.to_string() == state_name)
+        {
+            Some("a constructor arg")
+        } else if context_names.iter().any(|c| &c.to_string() == state_name) {
+            Some("a context parameter")
+        } else if external_inputs.contains(state_name) {
+            Some("an external input")
+        } else {
+            None
+        };
+        if let Some(kind) = collides_with {
+            return Err(syn::Error::new(
+                Span::call_site(),
+                format!(
+                    "state '{state_name}' (stage '{owner}') collides with {kind} of the same name"
                 ),
             ));
         }
@@ -1107,6 +1193,10 @@ fn collect_outputs(
                     if has_skip_clear_attr(attrs) {
                         continue;
                     }
+                    // #[state] is plain `T`, owned across cycles — never reset.
+                    if has_state_attr(attrs) {
+                        continue;
+                    }
                     // existing: get the pipeline field name (respect #[rename])
                     let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
                     outputs.insert(target_ident.to_string());
@@ -1206,8 +1296,8 @@ fn generate_puml(stages: &[ItemFn], context_names: &[Ident]) -> String {
                 && let syn::Pat::Ident(pat_ident) = &**pat
             {
                 let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
-                // Skip context parameters
-                if context_names.iter().any(|name| name == &target_ident) {
+                // Skip context parameters and off-graph #[state] fields.
+                if context_names.iter().any(|name| name == &target_ident) || has_state_attr(attrs) {
                     continue;
                 }
                 let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
@@ -1260,8 +1350,8 @@ fn generate_diagram_json(
                 && let syn::Pat::Ident(pat_ident) = &**pat
             {
                 let target_ident = normalized_target_ident(attrs, &pat_ident.ident);
-                // Skip context parameters
-                if context_names.iter().any(|name| name == &target_ident) {
+                // Skip context parameters and off-graph #[state] fields.
+                if context_names.iter().any(|name| name == &target_ident) || has_state_attr(attrs) {
                     continue;
                 }
                 let var_name = target_ident.to_string();
@@ -1308,6 +1398,7 @@ pub fn stage(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 last != Some(&Ident::new("rename", Span::call_site()))
                     && last != Some(&Ident::new("skip_reset", Span::call_site()))
                     && last != Some(&Ident::new("unused", Span::call_site()))
+                    && last != Some(&Ident::new("state", Span::call_site()))
             });
         }
     }
@@ -1337,6 +1428,18 @@ fn has_unused_attr(attrs: &[Attribute]) -> bool {
             .segments
             .last()
             .is_some_and(|seg| seg.ident == "unused")
+    })
+}
+
+/// Detect `#[state]` — a per-stage-private, persistent, plain-`T` field the
+/// pipeline owns and exactly one stage mutates (`&mut T`). Unlike a slot it is
+/// not on the dataflow graph: never reset, never read by another stage.
+fn has_state_attr(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path()
+            .segments
+            .last()
+            .is_some_and(|seg| seg.ident == "state")
     })
 }
 

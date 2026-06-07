@@ -63,7 +63,34 @@ no second dependency required.
 - `#[pipeline(name="…", args="…", context="…", external="…", error="…", controlflow_break="…", constructor="…")]`
   — declares the pipeline container; `args`/`context`/`external` describe inputs.
 - `#[stage]` — marks a function as a stage. Parameter attributes: `#[rename = "field"]`,
-  `#[skip_reset]`, `#[unused]`.
+  `#[skip_reset]`, `#[unused]`, `#[state]`.
+
+### Parameter kinds
+
+A stage parameter is one **base kind** (where its storage lives and who fills it):
+
+| Kind | Owner | Reset/cycle | Stage access | Shared? |
+|---|---|---|---|---|
+| `args` | pipeline | none | `&T` | many readers |
+| `context` | caller | none | `&T` / `&mut T` | many |
+| `external` (`external="…"`) | pipeline | dirty cleared | caller-fed | many readers |
+| internal `Value<T>`/`Vector<T>` | pipeline | dirty cleared | one writer, N readers | yes |
+| `#[state]` | pipeline | none | one stage, `&mut T` | no (private) |
+
+…optionally tweaked by a **modifier**: `#[rename]` (bind to a different field
+name), `#[skip_reset]` (a slot that persists instead of resetting), `#[unused]`
+(keep a parameter that's deliberately disconnected from the graph).
+
+`#[state]` is the only off-graph kind: per-stage-private, persistent, plain `T`
+the pipeline owns and exactly one stage mutates — for an accumulator, cache, or
+scratch that must survive across cycles. It is never reset, never read by another
+stage, and does not appear in `dot()` / `html_diagram()`. It requires `&mut T`;
+sharing one state across two stages is an error (use a `Value<T>` slot instead).
+
+> In the dynamic [`pipeline-graph`] front-end there is no `#[state]`: stages are
+> closures, so a stage simply captures its own persistent mutable state (with a
+> `Cell`/`RefCell` for interior mutability). `#[state]` is the static front-end's
+> equivalent, since its stages are free `fn`s that can't capture.
 
 ### Constructors
 

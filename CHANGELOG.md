@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `pipeline-dsl`: `#[state]` stage-parameter attribute — per-stage-private,
+  persistent, plain-`T` scratch the pipeline owns and exactly one stage mutates
+  (`&mut T`). Unlike a slot it is off the dataflow graph: never reset, never read
+  by another stage, and hidden from `dot()`/`html_diagram()`. Requires `&mut T`;
+  sharing one state across stages, or colliding with an arg/context/external/slot
+  name, is a compile error. (The dynamic `pipeline-graph` front-end needs no
+  equivalent — its closure stages capture private state directly.)
 - `pipeline-dsl`: smarter constructor generation. The generated `new()` now
   bounds each `Default`-initialized field by `Default` (a non-`Default` field
   gives a clear `T: Default is not satisfied` error instead of one buried in
