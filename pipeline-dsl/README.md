@@ -16,7 +16,7 @@ layer:
 
 ```toml
 [dependencies]
-pipeline-dsl = "0.7"
+pipeline-dsl = "0.8"
 ```
 
 (Optionally also depend on [`pipeline-core`] to refer to the value types under

@@ -13,7 +13,7 @@ A single dependency — `pipeline-graph` re-exports the value layer:
 
 ```toml
 [dependencies]
-pipeline-graph = "0.7"
+pipeline-graph = "0.8"
 ```
 
 (Optionally also depend on `pipeline-core` to refer to the value types under the
