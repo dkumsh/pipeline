@@ -5,7 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2026-06-07
+
+### Changed
+
+- `pipeline-dsl`: a pipeline with no `args` now also gets a generated
+  `impl Default`. **Potentially breaking**: if you already hand-wrote
+  `impl Default` for such a pipeline, it now conflicts (E0119) — remove your impl
+  or use `#[pipeline(constructor = "manual")]` (which suppresses both the
+  generated `new()` and `Default`).
 
 ### Added
 
