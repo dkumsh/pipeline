@@ -114,6 +114,57 @@ are blue ellipses, and the footer records when it was generated:
 See `examples/telemetry_monitor.rs` for a complete worked example and
 `doc/design.md` for concepts, design decisions, and the type-erasure chapter.
 
+## Wrapping in a typed facade
+
+`build()` returns the opaque `Pipeline`; you also hold the `Slot<T>` handles it
+was built from. When a graph's shape has stabilized, wrap both in your own
+newtype — it's the natural home for the (private) slots and lets you expose
+exactly the read-only / read-write surface you want. A `Deref` to `Pipeline`
+gives you `compute()` / `stats()` / `get()` for free:
+
+```rust
+use pipeline_graph::{Flow, Graph, GraphError, Input, Output, Pipeline, Slot, Value};
+
+pub struct Monitor {
+    inner: Pipeline,
+    reading: Slot<Value<f64>>, // private handles — callers can't reach the nodes
+    out: Slot<Value<f64>>,
+}
+
+impl Monitor {
+    pub fn new() -> Result<Self, GraphError> {
+        let mut g = Graph::named("Monitor");
+        let reading = g.slot::<Value<f64>>("reading");
+        let out = g.slot::<Value<f64>>("out");
+        g.external(reading);
+        g.stage("scale", (Input(reading), Output(out)),
+            |r: &Value<f64>, o: &mut Value<f64>| {
+                o.set(r.get_valid().copied().unwrap_or(0.0) / 100.0);
+                Ok(Flow::Continue)
+            });
+        Ok(Self { inner: g.build()?, reading, out })
+    }
+
+    pub fn feed(&mut self, x: f64) { self.inner.get_mut(self.reading).set(x); } // R/W you sanction
+    pub fn out(&self) -> Option<&f64> { self.inner.get(self.out).get_valid() }   // R/O
+}
+
+// `monitor.compute()`, `monitor.stats()`, … come through Deref.
+impl std::ops::Deref for Monitor {
+    type Target = Pipeline;
+    fn deref(&self) -> &Pipeline { &self.inner }
+}
+impl std::ops::DerefMut for Monitor {
+    fn deref_mut(&mut self) -> &mut Pipeline { &mut self.inner }
+}
+```
+
+There's deliberately no generic `build::<Monitor>()`: the slot→field mapping is
+your code (the slots are values you hold), so the wrapper *is* that mapping. If a
+graph's shape is fully fixed at compile time, the static
+[`pipeline-dsl`](https://crates.io/crates/pipeline-dsl) front-end gives you this
+typed, named-field pipeline directly.
+
 ## Safety
 
 The two front-ends are **not** equivalent on safety, and the difference is
