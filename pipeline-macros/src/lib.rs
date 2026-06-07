@@ -110,6 +110,7 @@ pub fn pipeline(attr: TokenStream, item: TokenStream) -> TokenStream {
         &error_ty,
         attr_args.break_ty.as_ref(),
         &main_crate_ident,
+        attr_args.constructor_manual,
     );
 
     // Reconstruct the module with stages unmodified
@@ -130,20 +131,13 @@ struct PipelineArgs {
     /// Name of the pipeline container type
     name: Ident,
     generics: Option<syn::Generics>,
-    /// Names of the pipeline constructor arguments, parameters provided via the `new`.
-    /// They are passed to stages as parameters.
     args: Vec<Ident>,
-    /// Names of the context parameters provided via the `context` attribute.  The
-    /// pipeline macro will infer the type for each name separately.
     context_names: Vec<Ident>,
-    /// Names of externally-fed fields declared via the `external` attribute.
-    /// Each becomes a `Default`-initialized `pub` field that no stage writes and
-    /// the caller populates between `compute()` runs. Like stage outputs, their
-    /// per-cycle dirty state is cleared by the pipeline at the end of `compute()`.
     external_names: Vec<Ident>,
     error_ty: Option<Type>,
     break_ty: Option<Type>,
     reset_on_break: bool,
+    constructor_manual: bool,
 }
 
 impl Parse for PipelineArgs {
@@ -156,6 +150,7 @@ impl Parse for PipelineArgs {
         let mut error_ty = None;
         let mut break_ty: Option<Type> = None;
         let mut reset_on_break = false;
+        let mut constructor_manual = false;
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
@@ -218,10 +213,22 @@ impl Parse for PipelineArgs {
                         ));
                     }
                 };
+            } else if key == "constructor" {
+                let value: LitStr = input.parse()?;
+                match value.value().as_str() {
+                    "manual" => constructor_manual = true,
+                    "auto" => constructor_manual = false,
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            value,
+                            "constructor must be 'auto' (default) or 'manual'",
+                        ));
+                    }
+                }
             } else {
                 return Err(syn::Error::new_spanned(
                     key,
-                    "Expected 'name', 'generics', 'args', 'context', 'external', 'error', 'controlflow_break', or 'reset_on_break' in pipeline attribute",
+                    "Expected 'name', 'generics', 'args', 'context', 'external', 'error', 'controlflow_break', 'reset_on_break', or 'constructor' in pipeline attribute",
                 ));
             }
             if input.peek(syn::Token![,]) {
@@ -245,6 +252,7 @@ impl Parse for PipelineArgs {
             error_ty,
             break_ty,
             reset_on_break,
+            constructor_manual,
         })
     }
 }
@@ -535,6 +543,7 @@ fn generate_impl(
     error_ty: &Type,
     break_ty: Option<&Type>,
     main_crate_ident: &Ident,
+    constructor_manual: bool,
 ) -> proc_macro2::TokenStream {
     let g = generics.cloned().unwrap_or_default();
     let (impl_generics, ty_generics, where_clause) = g.split_for_impl();
@@ -569,6 +578,78 @@ fn generate_impl(
             quote! { #name }
         })
         .collect::<Vec<_>>();
+
+    // --- Constructor generation ----------------------------------------------
+    // `new()` Default-initializes every non-arg field, so bound each such field
+    // type by `Default`. For a concrete type this yields a clean
+    // "`T: Default` is not satisfied" error (pointing the user at implementing
+    // Default or `constructor = "manual"`) instead of one buried in the struct
+    // literal; for a generic pipeline it propagates the real bound.
+    let mut default_bound_types: Vec<Type> = Vec::new();
+    {
+        let mut seen: Vec<String> = Vec::new();
+        for (ident, ty) in fields {
+            if constructor_args.contains(ident) {
+                continue;
+            }
+            let key = quote!(#ty).to_string();
+            if !seen.contains(&key) {
+                seen.push(key);
+                default_bound_types.push(ty.clone());
+            }
+        }
+    }
+    let default_bounds: Vec<TokenStream2> = default_bound_types
+        .iter()
+        .map(|ty| quote! { #ty: ::core::default::Default })
+        .collect();
+    let new_where = if default_bounds.is_empty() {
+        quote! {}
+    } else {
+        quote! { where #(#default_bounds),* }
+    };
+
+    // `constructor = "manual"` suppresses the generated `new()`/`Default` so the
+    // caller can write their own (e.g. for a field whose type is not `Default`).
+    let new_fn = if constructor_manual {
+        quote! {}
+    } else {
+        quote! {
+            pub fn new(#(#constructor_params),*) -> Self #new_where {
+                Self {
+                    pipeline_vars: [#(#pipeline_vars_init),*],
+                    #(#constructor_inits,)*
+                    #phantom_init
+                }
+            }
+        }
+    };
+
+    // A pipeline with no `args` (and an auto constructor) is fully Default-init,
+    // so expose `Default` too — this also satisfies `clippy::new_without_default`.
+    let default_impl = if !constructor_manual && constructor_args.is_empty() {
+        let mut preds: Vec<TokenStream2> = Vec::new();
+        if let Some(wc) = g.where_clause.as_ref() {
+            for p in &wc.predicates {
+                preds.push(quote! { #p });
+            }
+        }
+        preds.extend(default_bounds.iter().cloned());
+        let default_where = if preds.is_empty() {
+            quote! {}
+        } else {
+            quote! { where #(#preds),* }
+        };
+        quote! {
+            impl #impl_generics ::core::default::Default for #pipeline_name #ty_generics
+                #default_where
+            {
+                fn default() -> Self { Self::new() }
+            }
+        }
+    } else {
+        quote! {}
+    };
 
     // Generate clear calls only for fields that are outputs (written by some stage)
     let reset_calls: Vec<_> = fields
@@ -608,12 +689,7 @@ fn generate_impl(
         quote! {
 
             impl #impl_generics #pipeline_name #ty_generics #where_clause {
-                pub fn new(#(#constructor_params),*) -> Self {
-                    Self {
-                        pipeline_vars: [#(#pipeline_vars_init),*],
-                        #(#constructor_inits,)*
-                        #phantom_init                    }
-                }
+                #new_fn
                 /// Executes all stages in topological order, with early-exit support.
                 pub fn compute(#compute_params) -> Result<::std::ops::ControlFlow<#bt>, #error_ty> {
                     #(#compute_calls)*
@@ -645,17 +721,12 @@ fn generate_impl(
                     std::fs::write(file_path, Self::html_diagram())
                 }
             }
+            #default_impl
         }
     } else {
         quote! {
             impl #impl_generics #pipeline_name #ty_generics #where_clause {
-                pub fn new(#(#constructor_params),*) -> Self {
-                    Self {
-                        pipeline_vars: [#(#pipeline_vars_init),*],
-                        #(#constructor_inits,)*
-                        #phantom_init
-                    }
-                }
+                #new_fn
 
                 /// Executes all stages in topological order.
                 pub fn compute(#compute_params) -> Result<(), #error_ty> {
@@ -688,6 +759,7 @@ fn generate_impl(
                     std::fs::write(file_path, Self::html_diagram())
                 }
             }
+            #default_impl
         }
     }
 }

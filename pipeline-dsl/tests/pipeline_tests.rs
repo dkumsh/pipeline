@@ -73,6 +73,16 @@ fn test_rename_attribute() {
     assert_eq!(p.my_field, 42);
 }
 
+#[test]
+fn test_pipeline_without_args_derives_default() {
+    // A pipeline with no `args` (and the default `constructor = "auto"`) is
+    // fully Default-initialized, so the macro also derives `Default`.
+    let mut p = RenamePipeline::default();
+    p.compute()
+        .expect("default-constructed pipeline should run");
+    assert_eq!(p.my_field, 42);
+}
+
 // === Test 2: execution order and value propagation ===
 // This pipeline consists of three stages chained in sequence.  Each stage
 // records its name in the global CALLS vector and computes values based on

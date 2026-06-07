@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `pipeline-dsl`: smarter constructor generation. The generated `new()` now
+  bounds each `Default`-initialized field by `Default` (a non-`Default` field
+  gives a clear `T: Default is not satisfied` error instead of one buried in
+  generated code), a pipeline with no `args` also derives `Default`, and
+  `#[pipeline(constructor = "manual")]` suppresses the generated `new()`/`Default`
+  so you can write your own (e.g. for a field whose type is not `Default`).
+
 ## [0.6.0] - 2026-06-06
 
 ### Added

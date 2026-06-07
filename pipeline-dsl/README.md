@@ -60,10 +60,28 @@ no second dependency required.
 
 ## Attribute summary
 
-- `#[pipeline(name="…", args="…", context="…", external="…", error="…", controlflow_break="…")]`
+- `#[pipeline(name="…", args="…", context="…", external="…", error="…", controlflow_break="…", constructor="…")]`
   — declares the pipeline container; `args`/`context`/`external` describe inputs.
 - `#[stage]` — marks a function as a stage. Parameter attributes: `#[rename = "field"]`,
   `#[skip_reset]`, `#[unused]`.
+
+### Constructors
+
+When every field is `Default` (the usual case), the macro generates
+`Pipeline::new(args…)`; if there are no `args` it also derives `Default`. Each
+`Default`-initialized field is bounded by `Default`, so a field whose type isn't
+`Default` produces a clear `T: Default is not satisfied` error rather than one
+buried in generated code. In that case, pass `constructor = "manual"` and write
+your own constructor:
+
+```rust
+#[pipeline(name = "P", constructor = "manual")]
+mod p { /* … */ }
+
+impl P {
+    pub fn with_caps(n: usize) -> Self { /* build all fields yourself */ }
+}
+```
 
 See the repository for the full guide (binding rules, multiple contexts,
 generics, diagrams, diagnostics).
