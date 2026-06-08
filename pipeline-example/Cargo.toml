@@ -14,3 +14,9 @@ chrono = { workspace = true }
 pipeline-dsl = { path = "../pipeline-dsl" }
 anyhow = "1.0.93"
 thiserror = "2.0.3"
+
+[dev-dependencies]
+# Only for the async_harness example (this crate is `publish = false`, so these
+# never reach the published crates).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+flume = "0.11"

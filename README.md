@@ -40,6 +40,12 @@ readers. Opt into per-stage stats (`#[pipeline(stats)]` / `Pipeline::collect_sta
 to see how often each stage actually does work (run/skip counts + timing). See
 the runnable [`demand_driven`](pipeline-example/examples/demand_driven.rs) example.
 
+For a real-world application shape — async I/O at the edges (subscribe → update
+inputs → recompute → publish) wrapped around the sync engine — see the
+[`async_harness`](pipeline-example/examples/async_harness.rs) example: the
+pipeline is a single-owner actor on its own thread, fed by channels, that
+drains-and-coalesces input bursts and recomputes once.
+
 **Safety asymmetry (deliberate):** the static front-end is fully compile-time
 checked and contains no `unsafe`. The dynamic front-end trades that for runtime
 flexibility — wiring is validated at `build()` instead of by the compiler, and
