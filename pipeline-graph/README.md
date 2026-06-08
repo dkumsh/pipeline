@@ -149,7 +149,19 @@ impl Monitor {
     pub fn out(&self) -> Option<&f64> { self.inner.get(self.out).get_valid() }   // R/O
 }
 
-// `monitor.compute()`, `monitor.stats()`, … come through Deref.
+// `monitor.compute()`, `monitor.stats()`, … come through Deref. These two impls
+// are pure boilerplate; if you'd rather not hand-write them, derive them with
+// the `derive_more` crate — put `#[deref]`/`#[deref_mut]` on `inner`:
+//
+//     #[derive(derive_more::Deref, derive_more::DerefMut)]
+//     pub struct Monitor {
+//         #[deref] #[deref_mut] inner: Pipeline,
+//         reading: Slot<Value<f64>>,
+//         out: Slot<Value<f64>>,
+//     }
+//
+// The rest — the slots, `new()`, and the accessors — stays in the `impl`, since
+// that's the part that's actually yours to decide.
 impl std::ops::Deref for Monitor {
     type Target = Pipeline;
     fn deref(&self) -> &Pipeline { &self.inner }
