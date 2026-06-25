@@ -10,7 +10,13 @@ keywords.workspace = true
 readme = "README.md"
 
 [dependencies]
+rayon = { version = "1", optional = true }
 thiserror = { workspace = true }
+
+[features]
+# Parallel `Vector` access patterns (e.g. `par_update2`). Off by default so
+# the core layer stays dependency-light; consumers opt in.
+parallel = ["dep:rayon"]
 
 [lib]
 name = "pipeline"

@@ -18,6 +18,10 @@ pipeline-macros = { workspace = true }
 [dev-dependencies]
 thiserror = { workspace = true }
 
+[features]
+# Enable parallel Vector access patterns (re-exports `par_update2`).
+parallel = ["pipeline-core/parallel"]
+
 [lib]
 name = "pipeline_dsl"
 crate-type = ["rlib"]

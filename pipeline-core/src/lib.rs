@@ -9,6 +9,8 @@
 
 pub mod value;
 
+#[cfg(feature = "parallel")]
+pub use value::par_update2;
 /// Convenience root re-exports so callers can write `pipeline::Vector` etc.
 /// (the canonical paths under `pipeline::value::*` remain available too).
 pub use value::{Buckets, Value, Vector};

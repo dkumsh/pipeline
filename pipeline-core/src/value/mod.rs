@@ -7,6 +7,8 @@ pub mod buckets;
 pub mod vector;
 pub use buckets::Buckets;
 pub use vector::Vector;
+#[cfg(feature = "parallel")]
+pub use vector::par_update2;
 
 /// A single dirty/validity-tracked value — the scalar analogue of one
 /// [`Vector`] slot. State is **two orthogonal bits**, exactly like a `Vector`

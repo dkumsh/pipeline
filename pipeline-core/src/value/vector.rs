@@ -653,9 +653,98 @@ impl<'a> Iterator for IterUpdatedIndices<'a> {
     }
 }
 
+/// Apply `f` to slots `indices` of two vectors **in place and in
+/// parallel**, writing each slot's value in both `a` and `b`.
+///
+/// Marks every index valid+dirty in both vectors (single-threaded
+/// bookkeeping), then fans the data writes across rayon workers. The
+/// closure receives the slot index and an exclusive `&mut` into each
+/// vector's slot — typical use is a paired value + its metadata
+/// (e.g. a synthesised book and its provenance).
+///
+/// # Contract
+/// `indices` must be **distinct** and each `< a.len().min(b.len())`.
+/// Distinctness is what makes the parallel `&mut`s aliasing-free; it is
+/// `debug_assert`ed. Out-of-range indices panic.
+#[cfg(feature = "parallel")]
+pub fn par_update2<A, B, F>(a: &mut Vector<A>, b: &mut Vector<B>, indices: &[usize], f: F)
+where
+    A: Send,
+    B: Send,
+    F: Fn(usize, &mut A, &mut B) + Sync,
+{
+    use rayon::prelude::*;
+
+    debug_assert!(
+        {
+            let mut s = indices.to_vec();
+            s.sort_unstable();
+            s.windows(2).all(|w| w[0] != w[1])
+        },
+        "par_update2: indices must be distinct"
+    );
+
+    // Single-threaded bookkeeping: validity/dirty bitsets and the dirty
+    // count aren't safe to touch from multiple threads.
+    let len = a.data.len().min(b.data.len());
+    for &idx in indices {
+        assert!(
+            idx < len,
+            "par_update2: index {idx} out of bounds (len {len})"
+        );
+        a.set_valid_internal(idx, true);
+        a.mark_dirty_internal(idx);
+        b.set_valid_internal(idx, true);
+        b.mark_dirty_internal(idx);
+    }
+
+    // Parallel in-place data writes. Pointers are passed as `usize` because
+    // raw `*mut` isn't `Send`; each worker recreates the `&mut` from base +
+    // idx.
+    //
+    // SAFETY: we hold `&mut` to both whole vectors, `indices` are distinct
+    // (debug-asserted) and in bounds, so no two iterations alias the same
+    // slot of either vector.
+    let a_base = a.data.as_mut_ptr() as usize;
+    let b_base = b.data.as_mut_ptr() as usize;
+    indices.par_iter().for_each(|&idx| {
+        let av = unsafe { &mut *((a_base as *mut A).add(idx)) };
+        let bv = unsafe { &mut *((b_base as *mut B).add(idx)) };
+        f(idx, av, bv);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn par_update2_writes_both_vectors_and_marks_only_touched() {
+        let mut a: Vector<i64> = Vector::with_invalid_slots(6);
+        let mut b: Vector<i64> = Vector::with_invalid_slots(6);
+        par_update2(&mut a, &mut b, &[1, 4, 3], |idx, x, y| {
+            *x = idx as i64 * 10;
+            *y = idx as i64 * 100;
+        });
+        // Touched slots: valid, dirty, carry the written values in both.
+        for &i in &[1usize, 3, 4] {
+            assert_eq!(a.get_valid(i), Some(&(i as i64 * 10)), "a[{i}]");
+            assert_eq!(b.get_valid(i), Some(&(i as i64 * 100)), "b[{i}]");
+            assert!(a.is_updated_at(i) && b.is_updated_at(i), "dirty[{i}]");
+        }
+        // Untouched slots: still invalid and clean.
+        for &i in &[0usize, 2, 5] {
+            assert!(
+                a.get_valid(i).is_none() && !a.is_updated_at(i),
+                "a untouched[{i}]"
+            );
+            assert!(
+                b.get_valid(i).is_none() && !b.is_updated_at(i),
+                "b untouched[{i}]"
+            );
+        }
+    }
 
     #[test]
     fn test_new_vector() {
