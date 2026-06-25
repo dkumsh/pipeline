@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-06-25
+
+### Added
+
+- `pipeline-core`: `par_update2` — a parallel, in-place scatter over two
+  `Vector`s at a caller-supplied set of distinct slot indices. Each slot's
+  closure gets `&mut` to both vectors' values; touched slots are marked
+  valid+dirty. Gated behind the new opt-in `parallel` feature (pulls in
+  `rayon`), so default builds stay dependency-light with no `unsafe` compiled.
+  Re-exported from `pipeline-dsl` under the same `parallel` feature. Intended
+  for sparse fan-out stages whose per-slot work is heavy enough to amortize
+  rayon's fork-join overhead.
+
 ## [0.8.0] - 2026-06-07
 
 ### Added
