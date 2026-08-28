@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-08-28
+
+### Fixed
+
+- `pipeline-core`: `Value<T>: Default` no longer requires `T: Default`. The impl
+  is hand-written (`Value::new()`) instead of derived, matching `Vector` and
+  `Buckets`. The derived bound leaked into `#[pipeline]`, which builds its fields
+  with `Default` — ruling out any payload with a real constructor (a journal, a
+  connection, a position) as a `Value` slot.
+
 ## [0.8.1] - 2026-06-25
 
 ### Added

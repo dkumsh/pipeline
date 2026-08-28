@@ -6,7 +6,7 @@ readme = "README.md"
 keywords = ["pipeline", "dataflow", "dag", "macro", "workflow"]
 description = "Compile‑time pipeline DSL for structuring computations"
 edition = "2024"
-version = "0.8.1"
+version = "0.8.2"
 
 [workspace]
 resolver = "2"
@@ -27,7 +27,7 @@ members = [
 # paths are coupled to what pipeline-dsl re-exports, so the two move in lockstep.
 pipeline-core = { path = "pipeline-core", version = "0.8" }
 pipeline-diagram = { path = "pipeline-diagram", version = "0.8" }
-pipeline-macros = { path = "pipeline-macros", version = "=0.8.1" }
+pipeline-macros = { path = "pipeline-macros", version = "=0.8.2" }
 
 chrono = "0.4"
 syn = { version = "2.0", features = ["full", "extra-traits"] }
