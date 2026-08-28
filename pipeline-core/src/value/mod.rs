@@ -23,10 +23,19 @@ pub use vector::par_update2;
 /// "became invalid" signal propagates just like a write — exactly as
 /// [`Vector::invalidate`] marks a slot dirty. [`Reset`] clears the dirty bit;
 /// validity persists.
-#[derive(Default)]
 pub struct Value<T> {
     value: Option<T>,
     dirty: bool,
+}
+
+/// An empty cell, for any `T`.
+///
+/// Not derived: that would bound `T: Default`, which an empty cell does not need. `Vector` and
+/// `Buckets` are hand-written for the same reason.
+impl<T> Default for Value<T> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<T> Value<T> {
@@ -243,5 +252,16 @@ mod tests {
         assert!(!value.is_valid());
         // Invalidating an already-empty cell is not a change -> not dirty.
         assert!(!value.is_updated());
+    }
+
+    /// `#[pipeline]` builds its fields with `Default`, so a bound here would rule out any payload
+    /// with a real constructor — a journal, a connection, a position.
+    #[test]
+    fn default_does_not_require_the_payload_to_have_one() {
+        struct NoDefault(#[allow(dead_code)] u32);
+
+        let cell: Value<NoDefault> = Value::default();
+        assert!(!cell.is_valid());
+        assert!(!cell.is_updated());
     }
 }
